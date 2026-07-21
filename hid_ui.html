@@ -146,9 +146,11 @@ button.primary{background:var(--accent); color:#04231f; border-color:var(--accen
 .tree-fields{list-style:none; margin:6px 0 0; padding:0; font-family:var(--mono); font-size:.72rem; color:var(--ink-dim);}
 .tree-fields li{padding:1px 0;}
 .tree-fields li[data-lines]{cursor:pointer; border-radius:3px;}
-.tree-fields li[data-lines]:hover, .tree-fields li[data-lines].row-hit{background:var(--hit-bg);}
+.tree-fields li[data-lines]:hover, .tree-fields li[data-lines].row-hit,
+.tree-fields li[data-lines]:focus-visible{background:var(--hit-bg); outline:2px solid var(--accent); outline-offset:1px;}
 .tree-node .node-label[data-lines]{cursor:pointer; border-radius:3px;}
-.tree-node .node-label[data-lines]:hover, .tree-node .node-label[data-lines].row-hit{background:var(--hit-bg);}
+.tree-node .node-label[data-lines]:hover, .tree-node .node-label[data-lines].row-hit,
+.tree-node .node-label[data-lines]:focus-visible{background:var(--hit-bg); outline:2px solid var(--accent); outline-offset:1px;}
 .tree-fields li b{color:var(--ink);}
 
 .cards{
@@ -174,7 +176,8 @@ tbody td{
 }
 tbody tr:last-child td{border-bottom:none;}
 tbody tr[data-lines]{cursor:pointer;}
-tbody tr[data-lines]:hover, tbody tr[data-lines].row-hit{background:var(--hit-bg);}
+tbody tr[data-lines]:hover, tbody tr[data-lines].row-hit,
+tbody tr[data-lines]:focus-visible{background:var(--hit-bg); outline:2px solid var(--accent); outline-offset:-2px;}
 tbody td.field-name{font-family:var(--sans); font-weight:600; white-space:normal;}
 td.dim, span.dim{color:var(--ink-dim);}
 tbody tr.padding-row td.field-name{font-style:italic; color:var(--ink-dim); font-family:var(--sans); font-weight:500;}
@@ -461,12 +464,35 @@ function decodeUnit(unitVal, exponent){
 }
 
 function typeLabel(mainName, flags){
-  const isConst = !!(flags & 0x1);
-  const isRel = !!(flags & 0x4);
-  if (mainName==='Feature') return isConst ? 'Feature (Const)' : 'Feature';
-  let label = isConst ? 'Const' : 'Data';
-  if (isRel && !isConst) label += ' (Relative)';
-  return label;
+  const isArray = !(flags & 0x02);
+  const parts = [
+    flags & 0x01 ? 'Constant' : 'Data',
+    isArray ? 'Array' : 'Variable',
+    flags & 0x04 ? 'Relative' : 'Absolute',
+  ];
+  if (!isArray){
+    parts.push(flags & 0x08 ? 'Wrap' : 'No Wrap');
+    parts.push(flags & 0x10 ? 'Nonlinear' : 'Linear');
+    parts.push(flags & 0x20 ? 'No Preferred' : 'Preferred State');
+    parts.push(flags & 0x40 ? 'Null State' : 'No Null Position');
+    if (mainName!=='Input') parts.push(flags & 0x80 ? 'Volatile' : 'Non-volatile');
+    parts.push(flags & 0x100 ? 'Buffered Bytes' : 'Bit Field');
+  }
+  return parts.join(', ');
+}
+
+function collectionTypeName(value){
+  if (COLLECTION_TYPES[value]) return COLLECTION_TYPES[value];
+  if (value>=0x80 && value<=0xFF) return `Vendor-defined (0x${value.toString(16).toUpperCase()})`;
+  return `Reserved (0x${value.toString(16).toUpperCase()})`;
+}
+
+function descriptorError(message, line){
+  throw new Error(`${line ? `Line ${line}: ` : ''}${message}`);
+}
+
+function mergeLines(...groups){
+  return Array.from(new Set(groups.flat().filter(Number.isInteger))).sort((a,b)=>a-b);
 }
 
 // ---------- tokenizer ----------
@@ -481,7 +507,9 @@ function tokenize(text){
     while ((m = re.exec(line))){
       const tok = m[0];
       if (/^0[xX][0-9a-fA-F]+$/.test(tok)){
-        tokens.push({type:'num', value: parseInt(tok,16), line: ln+1});
+        const value = parseInt(tok,16);
+        if (value>0xFF) descriptorError(`Expected a byte, got ${tok}`, ln+1);
+        tokens.push({type:'num', value, line: ln+1});
       } else if (/^[A-Z][A-Z0-9_]*$/.test(tok)){
         tokens.push({type:'sym', value: tok, line: ln+1});
       }
@@ -490,32 +518,152 @@ function tokenize(text){
   return tokens;
 }
 
-// ---------- field expansion ----------
-function expandFields(usages, usageMin, usageMax, count, currentPage, isArray){
-  let list = usages.map(u=>({page:u.page, uid:u.uid, line:u.line}));
-  if (list.length===0 && usageMin!==null && usageMax!==null){
-    if (isArray) return [[usageMin, count, usageMax]];
-    const page = usageMin.page===usageMax.page ? usageMin.page : currentPage;
-    for (let u=usageMin.uid; u<=usageMax.uid; u++) list.push({page, uid: u, line: usageMin.line});
+// ---------- local item state and field expansion ----------
+function newLocalState(){
+  return {
+    usages: [], designators: [], strings: [],
+    delimiterDepth: 0, delimiterBranch: 0, sawDelimiter: false,
+  };
+}
+
+function localItemsAccepted(local){
+  return local.delimiterBranch<=1;
+}
+
+function addLocalValue(entries, value, lines){
+  entries.push({kind:'single', value, lines:[...lines]});
+}
+
+function startLocalRange(entries, value, lines, extended=false){
+  entries.push({kind:'range', min:value, max:null, lines:[...lines], extended});
+}
+
+function finishLocalRange(entries, value, lines, label, extended=false){
+  const range = [...entries].reverse().find(entry=>entry.kind==='range' && entry.max===null);
+  if (!range) descriptorError(`${label} Maximum has no preceding Minimum`, lines[0]);
+  if (label==='Usage' && range.extended!==extended){
+    descriptorError('Usage Minimum and Maximum must both be extended or both be short', lines[0]);
   }
-  if (list.length===0) return [[null, count, null]];
+  const minValue = label==='Usage' ? range.min.uid : range.min;
+  const maxValue = label==='Usage' ? value.uid : value;
+  if (label==='Usage' && range.min.page!==value.page){
+    descriptorError('Usage Minimum and Maximum must use the same Usage Page', lines[0]);
+  }
+  if (maxValue<minValue) descriptorError(`${label} Maximum is less than Minimum`, lines[0]);
+  range.max = value;
+  range.lines = mergeLines(range.lines, lines);
+}
+
+function validateLocalState(local, line){
+  if (local.delimiterDepth) descriptorError('Delimiter set is not closed', line);
+  // A Minimum with no matching Maximum (e.g. the HID 1.11 spec's own Appendix
+  // D.1 joystick example: "Usage Minimum (Button 3), Usage Minimum (Button 4)"
+  // with no Usage Maximum ever closing either range) is malformed, but it's
+  // exactly the kind of real-world anomaly this tool exists to help inspect --
+  // drop the incomplete range rather than aborting the whole parse over it.
+  local.usages = local.usages.filter(entry => !(entry.kind==='range' && entry.max===null));
+  local.designators = local.designators.filter(entry => !(entry.kind==='range' && entry.max===null));
+  local.strings = local.strings.filter(entry => !(entry.kind==='range' && entry.max===null));
+}
+
+function localStateHasItems(local){
+  return local.usages.length || local.designators.length || local.strings.length || local.sawDelimiter;
+}
+
+function expandedValues(entries, count, isUsage){
+  if (!entries.length) return Array(count).fill(null);
+  const values = [];
+  for (const entry of entries){
+    if (entry.kind==='single'){
+      values.push({value:entry.value, lines:[...entry.lines]});
+    } else {
+      const min = isUsage ? entry.min.uid : entry.min;
+      const max = isUsage ? entry.max.uid : entry.max;
+      for (let value=min; value<=max && values.length<count; value++){
+        values.push({
+          value:isUsage ? {page:entry.min.page, uid:value} : value,
+          lines:[...entry.lines],
+        });
+      }
+    }
+    if (values.length>=count) break;
+  }
+  if (!values.length) return Array(count).fill(null);
+  while (values.length<count){
+    const last = values[values.length-1];
+    values.push({value:last.value, lines:[...last.lines]});
+  }
+  return values.slice(0,count);
+}
+
+function usageEntryName(entry){
+  if (entry.kind==='single') return usageDisplayName(entry.value.page, entry.value.uid);
+  return usageRangeName(entry.min.page, entry.min.uid, entry.max.uid);
+}
+
+function usageEntryText(entry){
+  if (entry.kind==='single') return `(${pageStr(entry.value.page)}) ${usageStr(entry.value.uid)}`;
+  return `(${pageStr(entry.min.page)}) ${usageStr(entry.min.uid)}–${usageStr(entry.max.uid)}`;
+}
+
+function numericEntriesLabel(entries){
+  if (!entries.length) return null;
+  return entries.map(entry=>entry.kind==='single' ? String(entry.value) : `${entry.min}–${entry.max}`).join(', ');
+}
+
+function sameExpandedValue(a, b, isUsage=false){
+  if (a===null || b===null) return a===b;
+  if (isUsage) return a.value.page===b.value.page && a.value.uid===b.value.uid;
+  return a.value===b.value;
+}
+
+function expandFields(local, count, isArray, itemLines){
+  if (count===0) return [];
+  if (count>1000000) descriptorError(`Report Count ${count} is too large to display`, itemLines[0]);
+
   if (isArray){
-    const first = list[0], last = list[list.length-1];
-    return [[first, count, (last.page!==first.page || last.uid!==first.uid) ? last : null]];
+    const firstEntry = local.usages[0] || null;
+    const firstUsage = firstEntry ? (firstEntry.kind==='single' ? firstEntry.value : firstEntry.min) : null;
+    const singleRange = local.usages.length===1 && firstEntry.kind==='range' ? firstEntry : null;
+    return [{
+      usagePage:firstUsage ? firstUsage.page : null,
+      usageId:firstUsage ? firstUsage.uid : null,
+      usageIdMax:singleRange ? singleRange.max.uid : null,
+      usageText:local.usages.length ? local.usages.map(usageEntryText).join(', ') : null,
+      name:local.usages.length ? local.usages.map(usageEntryName).join(', ') : 'Padding',
+      count,
+      designatorLabel:numericEntriesLabel(local.designators),
+      stringLabel:numericEntriesLabel(local.strings),
+      lines:mergeLines(itemLines, ...local.usages.map(x=>x.lines), ...local.designators.map(x=>x.lines), ...local.strings.map(x=>x.lines)),
+    }];
   }
-  if (list.length < count){
-    const last = list[list.length-1];
-    while (list.length < count) list.push({page:last.page, uid:last.uid, line:last.line});
-  } else if (list.length > count){
-    list = list.slice(0, count);
-  }
+
+  const usageValues = expandedValues(local.usages, count, true);
+  const designatorValues = expandedValues(local.designators, count, false);
+  const stringValues = expandedValues(local.strings, count, false);
   const rows = [];
   let idx = 0;
-  while (idx < list.length){
-    let j = idx;
-    while (j+1 < list.length && list[j+1].page===list[idx].page && list[j+1].uid===list[idx].uid) j++;
-    rows.push([list[idx], j-idx+1, null]);
-    idx = j+1;
+  while (idx<count){
+    let end = idx;
+    while (end+1<count &&
+           sameExpandedValue(usageValues[idx], usageValues[end+1], true) &&
+           sameExpandedValue(designatorValues[idx], designatorValues[end+1]) &&
+           sameExpandedValue(stringValues[idx], stringValues[end+1])) end++;
+    const usage = usageValues[idx];
+    const designator = designatorValues[idx];
+    const stringIndex = stringValues[idx];
+    rows.push({
+      usagePage:usage ? usage.value.page : null,
+      usageId:usage ? usage.value.uid : null,
+      usageIdMax:null,
+      usageText:usage ? `(${pageStr(usage.value.page)}) ${usageStr(usage.value.uid)}` : null,
+      name:usage ? usageDisplayName(usage.value.page, usage.value.uid) : 'Padding',
+      count:end-idx+1,
+      designatorLabel:designator ? String(designator.value) : null,
+      stringLabel:stringIndex ? String(stringIndex.value) : null,
+      lines:mergeLines(itemLines, usage ? usage.lines : [], designator ? designator.lines : [], stringIndex ? stringIndex.lines : []),
+    });
+    idx = end+1;
   }
   return rows;
 }
@@ -524,29 +672,35 @@ function expandFields(usages, usageMin, usageMax, count, currentPage, isArray){
 function parseDescriptor(text){
   const tokens = tokenize(text);
   const state = {
-    usagePage:null, logicalMin:0, logicalMax:0, physicalMin:0, physicalMax:0,
+    usagePage:null, logicalMin:0, logicalMax:0, physicalMin:null, physicalMax:null,
     unitExponent:0, unit:0, reportSize:0, reportCount:0, reportId:null,
-    physicalDefined:false, unitDefined:false,
+    physicalMinDefined:false, physicalMaxDefined:false,
   };
   let globalStack = [];
-  let usages = [], usageMin = null, usageMax = null;
+  let local = newLocalState();
   let collectionStack = [];
   const root = [];
   let appNameStack = [];
   const reportGroups = new Map();
   const groupOrder = [];
+  const reportOffsets = new Map();
+  let sawDataMain = false;
+  let sawReportId = false;
 
   function currentParent(){ return collectionStack.length ? collectionStack[collectionStack.length-1].children : root; }
+  function resetLocal(){ local = newLocalState(); }
 
   let i = 0;
   while (i < tokens.length){
     const prefixTok = tokens[i++];
-    if (prefixTok.type !== 'num') continue;
+    if (prefixTok.type !== 'num') descriptorError('Symbolic values are only allowed as Report ID data', prefixTok.line);
     const prefix = prefixTok.value;
-    const itemLine = prefixTok.line;
     if (prefix === 0xFE){
-      const dataSize = (tokens[i] && tokens[i].value) || 0; i++;
-      i++; // long item tag byte
+      if (i+2>tokens.length) descriptorError('Truncated long item header', prefixTok.line);
+      const sizeToken = tokens[i++], tagToken = tokens[i++];
+      if (sizeToken.type!=='num' || tagToken.type!=='num') descriptorError('Long item header must contain bytes', prefixTok.line);
+      const dataSize = sizeToken.value;
+      if (i+dataSize>tokens.length) descriptorError('Truncated long item data', prefixTok.line);
       i += dataSize;
       continue;
     }
@@ -554,86 +708,131 @@ function parseDescriptor(text){
     const size = [0,1,2,4][sizeCode];
     const typeCode = (prefix >> 2) & 0x03;
     const tag = (prefix >> 4) & 0x0F;
+    if (i+size>tokens.length) descriptorError(`Truncated ${size}-byte short item`, prefixTok.line);
     const dataToks = tokens.slice(i, i+size);
     i += size;
+    const itemLines = mergeLines([prefixTok.line], dataToks.map(tok=>tok.line));
 
     let rawValue = 0, symbol = null;
     if (size > 0){
       if (dataToks.length===1 && dataToks[0].type==='sym'){
         symbol = dataToks[0].value;
       } else {
+        if (dataToks.some(tok=>tok.type!=='num')) descriptorError('Unexpected symbolic item data', prefixTok.line);
         for (let k=0; k<dataToks.length; k++){
           rawValue += (dataToks[k].value||0) * Math.pow(256,k);
         }
       }
     }
+    if (symbol!==null && !(typeCode===1 && tag===8)) descriptorError('Only Report ID items may use symbolic values', prefixTok.line);
 
     if (typeCode===1){ // Global
       const name = GLOBAL_TAGS[tag];
       if (name==='UsagePage') state.usagePage = rawValue;
       else if (name==='LogicalMinimum'){ state.logicalMin = signExtend(rawValue,size); }
-      else if (name==='LogicalMaximum'){ state.logicalMax = signExtend(rawValue,size); }
-      else if (name==='PhysicalMinimum'){ state.physicalMin = signExtend(rawValue,size); state.physicalDefined = true; }
-      else if (name==='PhysicalMaximum'){ state.physicalMax = signExtend(rawValue,size); state.physicalDefined = true; }
-      else if (name==='UnitExponent'){ let v = rawValue & 0xF; if (v>7) v-=16; state.unitExponent = v; state.unitDefined = true; }
-      else if (name==='Unit'){ state.unit = rawValue; state.unitDefined = true; }
+      else if (name==='LogicalMaximum'){ state.logicalMax = state.logicalMin<0 ? signExtend(rawValue,size) : rawValue; }
+      else if (name==='PhysicalMinimum'){
+        state.physicalMin = signExtend(rawValue,size);
+        state.physicalMinDefined = true;
+      }
+      else if (name==='PhysicalMaximum'){
+        state.physicalMax = state.physicalMinDefined && state.physicalMin<0 ? signExtend(rawValue,size) : rawValue;
+        state.physicalMaxDefined = true;
+      }
+      else if (name==='UnitExponent'){ let v = rawValue & 0xF; if (v>7) v-=16; state.unitExponent = v; }
+      else if (name==='Unit'){ state.unit = rawValue; }
       else if (name==='ReportSize') state.reportSize = rawValue;
       else if (name==='ReportCount') state.reportCount = rawValue;
-      else if (name==='ReportID') state.reportId = symbol!==null ? symbol : rawValue;
-      else if (name==='Push') globalStack.push(JSON.parse(JSON.stringify(state)));
-      else if (name==='Pop'){ if (globalStack.length) Object.assign(state, globalStack.pop()); }
+      else if (name==='ReportID'){
+        if (!sawReportId && sawDataMain) descriptorError('Report ID must be declared before the first data Main item', prefixTok.line);
+        if (symbol===null && (rawValue===0 || rawValue>0xFF)) descriptorError('Report ID must be between 1 and 255', prefixTok.line);
+        sawReportId = true;
+        state.reportId = symbol!==null ? symbol : rawValue;
+      }
+      else if (name==='Push') globalStack.push({...state});
+      else if (name==='Pop'){
+        if (!globalStack.length) descriptorError('Pop has no matching Push', prefixTok.line);
+        Object.assign(state, globalStack.pop());
+      }
     } else if (typeCode===2){ // Local
       const name = LOCAL_TAGS[tag];
-      if (name==='Usage'){
-        if (size===4){ const page=(rawValue>>>16)&0xFFFF; const uid=rawValue&0xFFFF; usages.push({page,uid,line:itemLine}); }
-        else usages.push({page: state.usagePage, uid: rawValue, line:itemLine});
-      } else if (name==='UsageMinimum'){
-        usageMin = size===4 ? {page:(rawValue>>>16)&0xFFFF, uid:rawValue&0xFFFF, line:itemLine} : {page:state.usagePage, uid:rawValue, line:itemLine};
-      }
-      else if (name==='UsageMaximum'){
-        usageMax = size===4 ? {page:(rawValue>>>16)&0xFFFF, uid:rawValue&0xFFFF, line:itemLine} : {page:state.usagePage, uid:rawValue, line:itemLine};
+      if (name==='Delimiter'){
+        local.sawDelimiter = true;
+        if (rawValue===1){
+          if (local.delimiterDepth) descriptorError('Nested Delimiter sets are not allowed', prefixTok.line);
+          local.delimiterDepth = 1;
+          local.delimiterBranch++;
+        } else if (rawValue===0){
+          if (!local.delimiterDepth) descriptorError('Delimiter close has no matching open', prefixTok.line);
+          local.delimiterDepth = 0;
+        } else descriptorError('Delimiter value must be 0 or 1', prefixTok.line);
+      } else if (localItemsAccepted(local)){
+        const usage = size===4
+          ? {page:(rawValue>>>16)&0xFFFF, uid:rawValue&0xFFFF}
+          : {page:state.usagePage, uid:rawValue};
+        if (name==='Usage') addLocalValue(local.usages, usage, itemLines);
+        else if (name==='UsageMinimum') startLocalRange(local.usages, usage, itemLines, size===4);
+        else if (name==='UsageMaximum') finishLocalRange(local.usages, usage, itemLines, 'Usage', size===4);
+        else if (name==='DesignatorIndex') addLocalValue(local.designators, rawValue, itemLines);
+        else if (name==='DesignatorMinimum') startLocalRange(local.designators, rawValue, itemLines);
+        else if (name==='DesignatorMaximum') finishLocalRange(local.designators, rawValue, itemLines, 'Designator');
+        else if (name==='StringIndex') addLocalValue(local.strings, rawValue, itemLines);
+        else if (name==='StringMinimum') startLocalRange(local.strings, rawValue, itemLines);
+        else if (name==='StringMaximum') finishLocalRange(local.strings, rawValue, itemLines, 'String');
       }
     } else if (typeCode===0){ // Main
       const name = MAIN_TAGS[tag];
+      validateLocalState(local, prefixTok.line);
       if (name==='Collection'){
-        const ctypeName = COLLECTION_TYPES[rawValue] || `Reserved (0x${rawValue.toString(16)})`;
-        const entry = usages.length ? usages[0] : usageMin;
-        const node = { kind:'collection', ctype: ctypeName, usagePage: entry?entry.page:null, usageId: entry?entry.uid:null, children: [], line: itemLine };
+        if (rawValue===1 && local.sawDelimiter) descriptorError('Delimiters cannot define an Application Collection', prefixTok.line);
+        const ctypeName = collectionTypeName(rawValue);
+        const usageEntry = local.usages[0] || null;
+        const entry = usageEntry ? (usageEntry.kind==='single' ? usageEntry.value : usageEntry.min) : null;
+        const node = {
+          kind:'collection', ctype:ctypeName,
+          usagePage:entry?entry.page:null, usageId:entry?entry.uid:null,
+          children:[], lines:mergeLines(itemLines, usageEntry ? usageEntry.lines : []),
+        };
         currentParent().push(node);
         collectionStack.push(node);
         if (ctypeName==='Application'){ node.isApp = true; appNameStack.push(collectionUsageName(node.usagePage, node.usageId)); }
-        usages = []; usageMin = null; usageMax = null;
+        resetLocal();
       } else if (name==='EndCollection'){
+        if (!collectionStack.length) descriptorError('End Collection has no matching Collection', prefixTok.line);
         const node = collectionStack.pop();
         if (node && node.isApp) appNameStack.pop();
-        usages = []; usageMin = null; usageMax = null;
+        resetLocal();
       } else if (name==='Input' || name==='Output' || name==='Feature'){
         const flags = rawValue;
+        if (flags>=0x200) descriptorError('Main item has non-zero reserved flag bits', prefixTok.line);
+        if (name==='Input' && (flags & 0x80)) descriptorError('Input item has reserved bit 7 set', prefixTok.line);
         const isArray = !(flags & 0x02);
-        const rows = expandFields(usages, usageMin, usageMax, state.reportCount, state.usagePage, isArray);
-        const physValid = state.physicalDefined;
-        const unitValid = state.unitDefined;
-        const fieldRows = rows.map(([u,cnt,uMax])=>{
-          const lineSet = new Set();
-          if (u && u.line) lineSet.add(u.line);
-          if (uMax && uMax.line) lineSet.add(uMax.line);
-          lineSet.add(itemLine);
-          return {
-            usagePage: u ? u.page : null,
-            usageId: u ? u.uid : null,
-            usageIdMax: uMax ? uMax.uid : null,
-            name: usageRangeName(u?u.page:null, u?u.uid:null, uMax?uMax.uid:null),
+        if (isArray && local.sawDelimiter) descriptorError('Delimiters cannot define an Array item', prefixTok.line);
+        if (sawReportId && state.reportId===null) descriptorError('Every report must have a Report ID once IDs are used', prefixTok.line);
+        sawDataMain = true;
+        const reportKey = `${state.reportId===null ? 'none' : `${typeof state.reportId}:${state.reportId}`}|${name}`;
+        const reportOffset = reportOffsets.get(reportKey) || 0;
+        if ((flags & 0x100) && (reportOffset%8!==0 || state.reportSize%8!==0)){
+          descriptorError('Buffered Bytes data must be byte-aligned', prefixTok.line);
+        }
+        const bitLength = state.reportSize * state.reportCount;
+        if (!Number.isSafeInteger(bitLength)) descriptorError('Report Size × Report Count is too large', prefixTok.line);
+        reportOffsets.set(reportKey, reportOffset + bitLength);
+
+        const physicalDefault = !state.physicalMinDefined || !state.physicalMaxDefined ||
+          (state.physicalMin===0 && state.physicalMax===0);
+        const physicalMin = physicalDefault ? state.logicalMin : state.physicalMin;
+        const physicalMax = physicalDefault ? state.logicalMax : state.physicalMax;
+        const fieldRows = expandFields(local, state.reportCount, isArray, itemLines).map(row=>({
+            ...row,
             size: state.reportSize,
-            count: cnt,
             logicalMin: state.logicalMin,
             logicalMax: state.logicalMax,
-            physicalMin: physValid ? state.physicalMin : null,
-            physicalMax: physValid ? state.physicalMax : null,
-            unitLabel: unitValid ? decodeUnit(state.unit, state.unitExponent) : null,
+            physicalMin,
+            physicalMax,
+            unitLabel: decodeUnit(state.unit, state.unitExponent),
             type: typeLabel(name, flags),
-            lines: Array.from(lineSet).sort((a,b)=>a-b),
-          };
-        });
+          }));
         const idLabel = state.reportId===null ? '—' : (typeof state.reportId==='string' ? state.reportId : usageStr(state.reportId));
         const groupKey = idLabel + '|' + name;
         if (!reportGroups.has(groupKey)){
@@ -646,10 +845,17 @@ function parseDescriptor(text){
           parentNode.fields = parentNode.fields || [];
           parentNode.fields.push(...fieldRows.map(r=>({name:r.name, size:r.size, count:r.count, lines:r.lines})));
         }
-        usages = []; usageMin = null; usageMax = null;
+        resetLocal();
+      } else {
+        resetLocal();
       }
     }
   }
+
+  if (localStateHasItems(local)) validateLocalState(local, tokens.length ? tokens[tokens.length-1].line : null);
+  if (localStateHasItems(local)) descriptorError('Local items are not followed by a Main item', tokens[tokens.length-1].line);
+  if (collectionStack.length) descriptorError(`${collectionStack.length} Collection item(s) are not closed`, tokens.length ? tokens[tokens.length-1].line : null);
+  if (globalStack.length) descriptorError(`${globalStack.length} Push item(s) have no matching Pop`, tokens.length ? tokens[tokens.length-1].line : null);
 
   const groups = groupOrder.map((k,idx)=>({ ...reportGroups.get(k), order: idx+1 }));
   return { root, groups };
@@ -666,12 +872,12 @@ function renderTreeNode(node){
   if (node.fields && node.fields.length){
     fieldsHtml = '<ul class="tree-fields">' + node.fields.map(f=>{
       const c = f.count>1 ? ` &times;${f.count}` : '';
-      const linesAttr = f.lines && f.lines.length ? ` data-lines="${f.lines.join(',')}"` : '';
+      const linesAttr = linkedAttrs(f.lines);
       return `<li${linesAttr}><b>${esc(f.name)}</b> <span class="dim">(${f.size} bit${f.size===1?'':'s'}${c})</span></li>`;
     }).join('') + '</ul>';
   }
   const childrenHtml = (node.children||[]).map(renderTreeNode).join('');
-  const nodeLinesAttr = node.line ? ` data-lines="${node.line}"` : '';
+  const nodeLinesAttr = linkedAttrs(node.lines);
   return `<div class="tree-node"><div class="node-label"${nodeLinesAttr}>${label}</div>${fieldsHtml}${childrenHtml}</div>`;
 }
 
@@ -679,15 +885,21 @@ function groupPaletteKey(order){ return PALETTE[(order-1) % PALETTE.length]; }
 
 function fmt(v){ return (v===null || v===undefined) ? '<span class="dim">—</span>' : esc(v); }
 
+function linkedAttrs(lines){
+  return lines && lines.length
+    ? ` data-lines="${lines.join(',')}" tabindex="0" role="button" aria-pressed="false"`
+    : '';
+}
+
 function renderGroup(g){
   const pal = groupPaletteKey(g.order);
   const title = `${g.appName ? esc(g.appName).toUpperCase()+' ' : ''}${g.mainType.toUpperCase()} REPORT`;
   const rows = g.rows.map(r=>{
     const isPad = r.usageId===null || r.usageId===undefined;
-    const linesAttr = r.lines && r.lines.length ? ` data-lines="${r.lines.join(',')}"` : '';
+    const linesAttr = linkedAttrs(r.lines);
     return `<tr class="${isPad?'padding-row':''}"${linesAttr}>
       <td class="field-name">${esc(r.name)}</td>
-      <td>${isPad ? '<span class="dim">—</span>' : (r.usageIdMax!=null ? `(${esc(pageStr(r.usagePage))}) ${esc(usageStr(r.usageId))}–${esc(usageStr(r.usageIdMax))}` : `(${esc(pageStr(r.usagePage))}) ${esc(usageStr(r.usageId))}`)}</td>
+      <td>${fmt(r.usageText)}</td>
       <td>${r.size}</td>
       <td>${r.count}</td>
       <td>${fmt(r.logicalMin)}</td>
@@ -695,6 +907,8 @@ function renderGroup(g){
       <td>${fmt(r.physicalMin)}</td>
       <td>${fmt(r.physicalMax)}</td>
       <td>${fmt(r.unitLabel)}</td>
+      <td>${fmt(r.designatorLabel)}</td>
+      <td>${fmt(r.stringLabel)}</td>
       <td>${esc(r.type)}</td>
     </tr>`;
   }).join('');
@@ -708,7 +922,7 @@ function renderGroup(g){
         <thead><tr>
           <th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th>
           <th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th>
-          <th>Unit</th><th>Type</th>
+          <th>Unit</th><th>Designator</th><th>String Index</th><th>Type</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -718,7 +932,7 @@ function renderGroup(g){
 
 function render(result){
   const out = document.getElementById('output');
-  pinnedEl = null; hoverEl = null;
+  pinnedEl = null; hoverEl = null; focusedEl = null;
   if (typeof setOverlayHighlight === 'function') setOverlayHighlight([]);
   if (!result.groups.length && !result.root.length){
     out.innerHTML = '<p class="empty-note">Nothing decoded yet — paste descriptor bytes on the left and hit Parse.</p>';
@@ -791,6 +1005,7 @@ function lineNumbersFromEl(el){
 
 const outputEl = document.getElementById('output');
 let hoverEl = null;
+let focusedEl = null;
 let pinnedEl = null;
 
 outputEl.addEventListener('mouseover', (e)=>{
@@ -803,24 +1018,53 @@ outputEl.addEventListener('mouseout', (e)=>{
   const el = e.target.closest('[data-lines]');
   if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
   hoverEl = null;
-  setOverlayHighlight(pinnedEl ? lineNumbersFromEl(pinnedEl) : []);
+  setOverlayHighlight(pinnedEl ? lineNumbersFromEl(pinnedEl) : (focusedEl ? lineNumbersFromEl(focusedEl) : []));
+});
+outputEl.addEventListener('focusin', (e)=>{
+  const el = e.target.closest('[data-lines]');
+  if (!el) return;
+  focusedEl = el;
+  if (!pinnedEl && !hoverEl) setOverlayHighlight(lineNumbersFromEl(el));
+});
+outputEl.addEventListener('focusout', (e)=>{
+  const el = e.target.closest('[data-lines]');
+  if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+  focusedEl = null;
+  setOverlayHighlight(pinnedEl ? lineNumbersFromEl(pinnedEl) : (hoverEl ? lineNumbersFromEl(hoverEl) : []));
 });
 outputEl.addEventListener('click', (e)=>{
   const el = e.target.closest('[data-lines]');
   if (!el) return;
+  togglePinnedElement(el);
+});
+outputEl.addEventListener('keydown', (e)=>{
+  if (e.key!=='Enter' && e.key!==' ') return;
+  const el = e.target.closest('[data-lines]');
+  if (!el) return;
+  e.preventDefault();
+  togglePinnedElement(el);
+});
+
+function togglePinnedElement(el){
   if (pinnedEl === el){
     pinnedEl.classList.remove('row-hit');
+    pinnedEl.setAttribute('aria-pressed', 'false');
     pinnedEl = null;
-    setOverlayHighlight(hoverEl ? lineNumbersFromEl(hoverEl) : []);
+    const activeEl = hoverEl || focusedEl;
+    setOverlayHighlight(activeEl ? lineNumbersFromEl(activeEl) : []);
     return;
   }
-  if (pinnedEl) pinnedEl.classList.remove('row-hit');
+  if (pinnedEl){
+    pinnedEl.classList.remove('row-hit');
+    pinnedEl.setAttribute('aria-pressed', 'false');
+  }
   pinnedEl = el;
   el.classList.add('row-hit');
+  el.setAttribute('aria-pressed', 'true');
   const lines = lineNumbersFromEl(el);
   setOverlayHighlight(lines);
   if (lines.length) scrollToLine(lines[0]);
-});
+}
 
 const workbenchEl = document.querySelector('.workbench');
 const resizerEl = document.getElementById('resizer');
