@@ -416,6 +416,12 @@ function usageDisplayName(page, uid){
   if (table && table[uid]) return table[uid];
   return `Usage ${usageStr(uid)}`;
 }
+function usageRangeName(page, uid, uidMax){
+  if (uidMax===null || uidMax===undefined) return usageDisplayName(page, uid);
+  const minName = usageDisplayName(page, uid);
+  const maxName = usageDisplayName(page, uidMax);
+  return minName===maxName ? minName : `${minName} – ${maxName}`;
+}
 function collectionUsageName(page, uid){
   if (uid===null || uid===undefined) return page!==null ? `Usage Page ${pageStr(page)}` : '';
   return usageDisplayName(page, uid);
@@ -485,13 +491,18 @@ function tokenize(text){
 }
 
 // ---------- field expansion ----------
-function expandFields(usages, usageMin, usageMax, count, currentPage){
+function expandFields(usages, usageMin, usageMax, count, currentPage, isArray){
   let list = usages.map(u=>({page:u.page, uid:u.uid, line:u.line}));
   if (list.length===0 && usageMin!==null && usageMax!==null){
+    if (isArray) return [[usageMin, count, usageMax]];
     const page = usageMin.page===usageMax.page ? usageMin.page : currentPage;
     for (let u=usageMin.uid; u<=usageMax.uid; u++) list.push({page, uid: u, line: usageMin.line});
   }
-  if (list.length===0) return [[null, count]];
+  if (list.length===0) return [[null, count, null]];
+  if (isArray){
+    const first = list[0], last = list[list.length-1];
+    return [[first, count, (last.page!==first.page || last.uid!==first.uid) ? last : null]];
+  }
   if (list.length < count){
     const last = list[list.length-1];
     while (list.length < count) list.push({page:last.page, uid:last.uid, line:last.line});
@@ -503,7 +514,7 @@ function expandFields(usages, usageMin, usageMax, count, currentPage){
   while (idx < list.length){
     let j = idx;
     while (j+1 < list.length && list[j+1].page===list[idx].page && list[j+1].uid===list[idx].uid) j++;
-    rows.push([list[idx], j-idx+1]);
+    rows.push([list[idx], j-idx+1, null]);
     idx = j+1;
   }
   return rows;
@@ -598,17 +609,20 @@ function parseDescriptor(text){
         usages = []; usageMin = null; usageMax = null;
       } else if (name==='Input' || name==='Output' || name==='Feature'){
         const flags = rawValue;
-        const rows = expandFields(usages, usageMin, usageMax, state.reportCount, state.usagePage);
+        const isArray = !(flags & 0x02);
+        const rows = expandFields(usages, usageMin, usageMax, state.reportCount, state.usagePage, isArray);
         const physValid = state.physicalDefined;
         const unitValid = state.unitDefined;
-        const fieldRows = rows.map(([u,cnt])=>{
+        const fieldRows = rows.map(([u,cnt,uMax])=>{
           const lineSet = new Set();
           if (u && u.line) lineSet.add(u.line);
+          if (uMax && uMax.line) lineSet.add(uMax.line);
           lineSet.add(itemLine);
           return {
             usagePage: u ? u.page : null,
             usageId: u ? u.uid : null,
-            name: usageDisplayName(u?u.page:null, u?u.uid:null),
+            usageIdMax: uMax ? uMax.uid : null,
+            name: usageRangeName(u?u.page:null, u?u.uid:null, uMax?uMax.uid:null),
             size: state.reportSize,
             count: cnt,
             logicalMin: state.logicalMin,
@@ -673,7 +687,7 @@ function renderGroup(g){
     const linesAttr = r.lines && r.lines.length ? ` data-lines="${r.lines.join(',')}"` : '';
     return `<tr class="${isPad?'padding-row':''}"${linesAttr}>
       <td class="field-name">${esc(r.name)}</td>
-      <td>${isPad ? '<span class="dim">—</span>' : `(${esc(pageStr(r.usagePage))}) ${esc(usageStr(r.usageId))}`}</td>
+      <td>${isPad ? '<span class="dim">—</span>' : (r.usageIdMax!=null ? `(${esc(pageStr(r.usagePage))}) ${esc(usageStr(r.usageId))}–${esc(usageStr(r.usageIdMax))}` : `(${esc(pageStr(r.usagePage))}) ${esc(usageStr(r.usageId))}`)}</td>
       <td>${r.size}</td>
       <td>${r.count}</td>
       <td>${fmt(r.logicalMin)}</td>

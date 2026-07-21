@@ -263,6 +263,7 @@ class FieldRow:
     physical_max: Optional[int]
     unit_label: Optional[str]
     type_label: str
+    usage_id_max: Optional[int] = None
 
 
 @dataclass
@@ -320,6 +321,14 @@ def usage_display_name(page: Optional[int], uid: Optional[int]) -> str:
     return USAGE_NAMES.get(page, {}).get(uid, f"Usage 0x{uid:02X}")
 
 
+def usage_range_name(page: Optional[int], uid: Optional[int], uid_max: Optional[int]) -> str:
+    if uid_max is None:
+        return usage_display_name(page, uid)
+    min_name = usage_display_name(page, uid)
+    max_name = usage_display_name(page, uid_max)
+    return min_name if min_name == max_name else f"{min_name} – {max_name}"
+
+
 def collection_usage_name(page: Optional[int], uid: Optional[int]) -> str:
     if uid is None:
         return f"Usage Page {page_str(page)}" if page is not None else ""
@@ -367,16 +376,29 @@ def type_label(main_name: str, flags: int) -> str:
     return label
 
 
-def expand_fields(usages, usage_min, usage_max, count, current_page):
+def expand_fields(usages, usage_min, usage_max, count, current_page, is_array):
     """Split a Main item's REPORT_COUNT slots across the usages declared for it.
 
-    Mirrors how these descriptors are conventionally read: one usage per bit
-    slot when usages line up with the count (Button 1/2/3), the last usage
-    repeated for any extra slots per the HID spec, and a single aggregated
-    "Padding" row when no usage was declared at all (pure constant filler).
+    Variable items (is_array=False) mirror how these descriptors are conventionally
+    read: one usage per bit slot when usages line up with the count (Button 1/2/3),
+    the last usage repeated for any extra slots per the HID spec.
+
+    Array items (is_array=True) are semantically different: REPORT_COUNT is the
+    number of simultaneous index slots (e.g. up to 6 concurrent keycodes), and
+    each slot can independently hold any value in the declared usage range at
+    runtime -- it is one field-group, not one distinct control per slot. Splitting
+    those per slot (like a Variable item) would fabricate `count` fake fields out
+    of what is really a single ranged array, e.g. truncating a 0x00-0x65 keycode
+    array down to just its first few values. So an Array item always collapses to
+    a single row spanning the whole REPORT_COUNT, with its usage range preserved.
+
+    A single aggregated "Padding" row is returned when no usage was declared at
+    all (pure constant filler), regardless of Array/Variable.
     """
     usage_list = list(usages)
     if not usage_list and usage_min is not None and usage_max is not None:
+        if is_array:
+            return [(usage_min, count, usage_max)]
         min_page, min_uid = usage_min
         max_page, max_uid = usage_max
         if min_page == max_page:
@@ -384,7 +406,10 @@ def expand_fields(usages, usage_min, usage_max, count, current_page):
         else:
             usage_list = [(current_page, u) for u in range(min_uid, max_uid + 1)]
     if not usage_list:
-        return [(None, count)]
+        return [(None, count, None)]
+    if is_array:
+        first, last = usage_list[0], usage_list[-1]
+        return [(first, count, last if last != first else None)]
     if len(usage_list) < count:
         last = usage_list[-1]
         usage_list = usage_list + [last] * (count - len(usage_list))
@@ -396,7 +421,7 @@ def expand_fields(usages, usage_min, usage_max, count, current_page):
         j = i
         while j + 1 < len(usage_list) and usage_list[j + 1] == usage_list[i]:
             j += 1
-        rows.append((usage_list[i], j - i + 1))
+        rows.append((usage_list[i], j - i + 1, None))
         i = j + 1
     return rows
 
@@ -564,16 +589,19 @@ def parse_descriptor(text: str) -> ParseResult:
 
             elif name in ("Input", "Output", "Feature"):
                 flags = raw_value
-                rows = expand_fields(usages, usage_min, usage_max, report_count, usage_page)
+                is_array = not (flags & 0x02)
+                rows = expand_fields(usages, usage_min, usage_max, report_count, usage_page, is_array)
                 phys_valid = physical_defined
                 unit_valid = unit_defined
                 field_rows = []
-                for u, cnt in rows:
+                for u, cnt, u_max in rows:
                     u_page, u_id = u if u is not None else (None, None)
+                    u_max_id = u_max[1] if u_max is not None else None
                     field_rows.append(FieldRow(
-                        name=usage_display_name(u_page, u_id),
+                        name=usage_range_name(u_page, u_id, u_max_id),
                         usage_page=u_page,
                         usage_id=u_id,
+                        usage_id_max=u_max_id,
                         size=report_size,
                         count=cnt,
                         logical_min=logical_min,
@@ -623,7 +651,12 @@ COLUMNS = ["Field", "Usage (Page)", "Size (bits)", "Count", "Logical Min",
 
 
 def row_cells(r: FieldRow):
-    usage_col = "—" if r.usage_id is None else f"({page_str(r.usage_page)}) {usage_str(r.usage_id)}"
+    if r.usage_id is None:
+        usage_col = "—"
+    elif r.usage_id_max is not None:
+        usage_col = f"({page_str(r.usage_page)}) {usage_str(r.usage_id)}–{usage_str(r.usage_id_max)}"
+    else:
+        usage_col = f"({page_str(r.usage_page)}) {usage_str(r.usage_id)}"
     return [
         r.name, usage_col, str(r.size), str(r.count),
         fmt_cell(r.logical_min), fmt_cell(r.logical_max),
@@ -706,7 +739,13 @@ def render_group_html(g: ReportGroup) -> str:
     rows_html = []
     for r in g.rows:
         is_pad = r.usage_id is None
-        usage_col = "&mdash;" if is_pad else f"({html.escape(page_str(r.usage_page))}) {html.escape(usage_str(r.usage_id))}"
+        if is_pad:
+            usage_col = "&mdash;"
+        elif r.usage_id_max is not None:
+            usage_col = (f"({html.escape(page_str(r.usage_page))}) "
+                         f"{html.escape(usage_str(r.usage_id))}&ndash;{html.escape(usage_str(r.usage_id_max))}")
+        else:
+            usage_col = f"({html.escape(page_str(r.usage_page))}) {html.escape(usage_str(r.usage_id))}"
         rows_html.append(
             "<tr>"
             f'<td class="field-name{" pad" if is_pad else ""}">{html.escape(r.name)}</td>'
