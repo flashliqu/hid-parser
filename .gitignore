@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .claude/
+
+# USB-IF spec PDF: its own license forbids external/public redistribution
+hid1_11.pdf
+hid1_11.pdf:*
