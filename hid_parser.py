@@ -193,6 +193,7 @@ USAGE_NAMES = {
     0x01: {0x01: "Pointer", 0x02: "Mouse", 0x30: "X", 0x31: "Y"},
     0x0D: {
         0x05: "Touch Pad", 0x0E: "Configuration", 0x22: "Finger",
+        0x30: "Pressure", 0x3F: "Azimuth",
         0x42: "Tip Switch", 0x47: "Confidence", 0x48: "Width", 0x49: "Height",
         0x51: "Contact Identifier", 0x52: "Input Mode", 0x54: "Contact Count",
         0x55: "Contact Count Maximum", 0x56: "Scan Time", 0x57: "Surface Switch",
@@ -200,6 +201,7 @@ USAGE_NAMES = {
         0xB0: "Button Press Threshold",
     },
     0x0E: {0x01: "Simple Haptics Controller", 0x23: "Intensity"},
+    0x20: {0x0494: "Mechanical Force"},
 }
 
 # Well-known vendor-defined usages from Microsoft's Precision Touchpad
