@@ -1,0 +1,100 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>HID Report Descriptor (Parsed)</title>
+<style>
+body { font-family: -apple-system, "Segoe UI", Arial, sans-serif; background:#eef1f0; color:#151a19; margin:0; padding:24px; }
+h1 { font-size:1.2rem; margin:0 0 18px; }
+.tree { border:1px solid #c9d1cd; border-radius:8px; background:#fff; padding:14px 16px; margin-bottom:24px; }
+.node { border-left:2px solid #c9d1cd; margin-left:6px; padding-left:12px; margin-top:8px; font-family: ui-monospace, Consolas, monospace; font-size:.8rem; }
+.node-label { }
+.dim { color:#6b7570; }
+ul.fields { list-style:none; margin:6px 0 0; padding:0; font-size:.75rem; color:#6b7570; }
+.cards { display:flex; flex-direction:column; gap:18px; }
+.card { border:1px solid var(--line); border-radius:8px; overflow:hidden; background:#fff; }
+.card-head { background:var(--bg); color:var(--ink); border-bottom:1px solid var(--line);
+  padding:9px 14px; font-weight:700; font-size:.85rem; display:flex; justify-content:space-between; gap:10px; }
+.rid { font-family: ui-monospace, Consolas, monospace; font-weight:600; font-size:.75rem; opacity:.85; }
+.table-scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; font-size:.78rem; }
+thead th { text-align:left; padding:7px 10px; font-size:.68rem; text-transform:uppercase; letter-spacing:.04em;
+  color:#6b7570; border-bottom:1px solid #c9d1cd; white-space:nowrap; }
+tbody td { padding:6px 10px; border-bottom:1px solid #e3e7e4; font-family: ui-monospace, Consolas, monospace; white-space:nowrap; }
+td.field-name { font-family:inherit; font-weight:600; white-space:normal; }
+td.field-name.pad { font-style:italic; font-weight:500; color:#6b7570; }
+</style></head>
+<body>
+<h1>HID Report Descriptor (Parsed)</h1>
+<div class="tree"><div class="node"><div class="node-label"><b>Application Collection</b> <span class="dim">&mdash; (0x0D) 0x05 &middot; Touch Pad</span></div><ul class="fields"><li><b>Scan Time</b> <span class="dim">(16 bits)</span></li><li><b>Contact Count</b> <span class="dim">(8 bits)</span></li><li><b>Button 1</b> <span class="dim">(1 bit)</span></li><li><b>Button 2</b> <span class="dim">(1 bit)</span></li><li><b>Button 3</b> <span class="dim">(1 bit)</span></li><li><b>Padding</b> <span class="dim">(1 bit &times;5)</span></li><li><b>Contact Count Maximum</b> <span class="dim">(4 bits)</span></li><li><b>Pad Type</b> <span class="dim">(4 bits)</span></li><li><b>Vendor Data (PTPHQA Blob)</b> <span class="dim">(8 bits &times;256)</span></li></ul><div class="node"><div class="node-label"><b>Logical Collection</b> <span class="dim">&mdash; (0x0D) 0x22 &middot; Finger</span></div><ul class="fields"><li><b>Confidence</b> <span class="dim">(1 bit)</span></li><li><b>Tip Switch</b> <span class="dim">(1 bit)</span></li><li><b>Contact Identifier</b> <span class="dim">(2 bits)</span></li><li><b>Padding</b> <span class="dim">(1 bit &times;4)</span></li><li><b>X</b> <span class="dim">(16 bits)</span></li><li><b>Y</b> <span class="dim">(16 bits)</span></li></ul></div></div><div class="node"><div class="node-label"><b>Application Collection</b> <span class="dim">&mdash; (0x0D) 0x0E &middot; Configuration</span></div><div class="node"><div class="node-label"><b>Logical Collection</b> <span class="dim">&mdash; (0x0D) 0x22 &middot; Finger</span></div><ul class="fields"><li><b>Input Mode</b> <span class="dim">(8 bits)</span></li></ul></div><div class="node"><div class="node-label"><b>Physical Collection</b> <span class="dim">&mdash; (0x0D) 0x22 &middot; Finger</span></div><ul class="fields"><li><b>Surface Switch</b> <span class="dim">(1 bit)</span></li><li><b>Button Switch</b> <span class="dim">(1 bit)</span></li><li><b>Padding</b> <span class="dim">(1 bit &times;6)</span></li></ul></div></div><div class="node"><div class="node-label"><b>Application Collection</b> <span class="dim">&mdash; (0x01) 0x02 &middot; Mouse</span></div><div class="node"><div class="node-label"><b>Physical Collection</b> <span class="dim">&mdash; (0x01) 0x01 &middot; Pointer</span></div><ul class="fields"><li><b>Button 1</b> <span class="dim">(1 bit)</span></li><li><b>Button 2</b> <span class="dim">(1 bit)</span></li><li><b>Padding</b> <span class="dim">(1 bit &times;6)</span></li><li><b>X</b> <span class="dim">(16 bits)</span></li><li><b>Y</b> <span class="dim">(16 bits)</span></li></ul></div></div></div>
+<div class="cards">
+    <div class="card" style="--bg:#e4ecdd; --line:#7f9d68; --ink:#33471f;">
+      <div class="card-head">
+        <span>1) TOUCH PAD INPUT REPORT</span>
+        <span class="rid">Report ID: REPORTID_TOUCHPAD</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th><th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th><th>Unit</th><th>Type</th></tr></thead>
+          <tbody><tr><td class="field-name">Confidence</td><td>(0x0D) 0x47</td><td>1</td><td>1</td><td>0</td><td>1</td><td>—</td><td>—</td><td>—</td><td>Data</td></tr><tr><td class="field-name">Tip Switch</td><td>(0x0D) 0x42</td><td>1</td><td>1</td><td>0</td><td>1</td><td>—</td><td>—</td><td>—</td><td>Data</td></tr><tr><td class="field-name">Contact Identifier</td><td>(0x0D) 0x51</td><td>2</td><td>1</td><td>0</td><td>2</td><td>—</td><td>—</td><td>—</td><td>Data</td></tr><tr><td class="field-name pad">Padding</td><td>&mdash;</td><td>1</td><td>4</td><td>0</td><td>2</td><td>—</td><td>—</td><td>—</td><td>Const</td></tr><tr><td class="field-name">X</td><td>(0x01) 0x30</td><td>16</td><td>1</td><td>0</td><td>4095</td><td>0</td><td>400</td><td>Inch (10^-2)</td><td>Data</td></tr><tr><td class="field-name">Y</td><td>(0x01) 0x31</td><td>16</td><td>1</td><td>0</td><td>4095</td><td>0</td><td>275</td><td>Inch (10^-2)</td><td>Data</td></tr><tr><td class="field-name">Scan Time</td><td>(0x0D) 0x56</td><td>16</td><td>1</td><td>0</td><td>65535</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name">Contact Count</td><td>(0x0D) 0x54</td><td>8</td><td>1</td><td>0</td><td>127</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name">Button 1</td><td>(0x09) 0x01</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name">Button 2</td><td>(0x09) 0x02</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name">Button 3</td><td>(0x09) 0x03</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name pad">Padding</td><td>&mdash;</td><td>1</td><td>5</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Const</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="--bg:#f5ead2; --line:#c69641; --ink:#5a3f0c;">
+      <div class="card-head">
+        <span>2) TOUCH PAD FEATURE REPORT</span>
+        <span class="rid">Report ID: REPORTID_MAX_COUNT</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th><th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th><th>Unit</th><th>Type</th></tr></thead>
+          <tbody><tr><td class="field-name">Contact Count Maximum</td><td>(0x0D) 0x55</td><td>4</td><td>1</td><td>0</td><td>15</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature</td></tr><tr><td class="field-name">Pad Type</td><td>(0x0D) 0x59</td><td>4</td><td>1</td><td>0</td><td>15</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="--bg:#f5e0da; --line:#c06a52; --ink:#5c2717;">
+      <div class="card-head">
+        <span>3) TOUCH PAD FEATURE REPORT</span>
+        <span class="rid">Report ID: REPORTID_PTPHQA</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th><th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th><th>Unit</th><th>Type</th></tr></thead>
+          <tbody><tr><td class="field-name">Vendor Data (PTPHQA Blob)</td><td>(0xFF00) 0xC5</td><td>8</td><td>256</td><td>0</td><td>255</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="--bg:#dfe8f2; --line:#5081b3; --ink:#1c3550;">
+      <div class="card-head">
+        <span>4) CONFIGURATION FEATURE REPORT</span>
+        <span class="rid">Report ID: REPORTID_FEATURE</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th><th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th><th>Unit</th><th>Type</th></tr></thead>
+          <tbody><tr><td class="field-name">Input Mode</td><td>(0x0D) 0x52</td><td>8</td><td>1</td><td>0</td><td>10</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="--bg:#e9e0f0; --line:#8c68b0; --ink:#3c2652;">
+      <div class="card-head">
+        <span>5) CONFIGURATION FEATURE REPORT</span>
+        <span class="rid">Report ID: REPORTID_FUNCTION_SWITCH</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th><th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th><th>Unit</th><th>Type</th></tr></thead>
+          <tbody><tr><td class="field-name">Surface Switch</td><td>(0x0D) 0x57</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature</td></tr><tr><td class="field-name">Button Switch</td><td>(0x0D) 0x58</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature</td></tr><tr><td class="field-name pad">Padding</td><td>&mdash;</td><td>1</td><td>6</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Feature (Const)</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="--bg:#dcebee; --line:#4791a3; --ink:#153b43;">
+      <div class="card-head">
+        <span>6) MOUSE INPUT REPORT</span>
+        <span class="rid">Report ID: REPORTID_MOUSE</span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th><th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th><th>Unit</th><th>Type</th></tr></thead>
+          <tbody><tr><td class="field-name">Button 1</td><td>(0x09) 0x01</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name">Button 2</td><td>(0x09) 0x02</td><td>1</td><td>1</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data</td></tr><tr><td class="field-name pad">Padding</td><td>&mdash;</td><td>1</td><td>6</td><td>0</td><td>1</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Const</td></tr><tr><td class="field-name">X</td><td>(0x01) 0x30</td><td>16</td><td>1</td><td>0</td><td>10</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data (Relative)</td></tr><tr><td class="field-name">Y</td><td>(0x01) 0x31</td><td>16</td><td>1</td><td>0</td><td>10</td><td>0</td><td>65535</td><td>Seconds (10^-4)</td><td>Data (Relative)</td></tr></tbody>
+        </table>
+      </div>
+    </div></div>
+</body></html>

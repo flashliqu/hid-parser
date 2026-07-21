@@ -1,0 +1,873 @@
+<title>HID Report Descriptor Decoder</title>
+<style>
+:root{
+  --paper:#eef1f0;
+  --paper-raised:#ffffff;
+  --ink:#151a19;
+  --ink-dim:#4c5654;
+  --line:#c9d1cd;
+  --accent:#1f8f86;
+  --accent-ink:#0d3f3b;
+  --hit-bg:rgba(31,143,134,0.16);
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Consolas", "Menlo", monospace;
+  --sans: -apple-system, "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+
+  --g-touchpad-bg:#e4ecdd;   --g-touchpad-line:#7f9d68;  --g-touchpad-ink:#33471f;
+  --g-maxcount-bg:#f5ead2;   --g-maxcount-line:#c69641;  --g-maxcount-ink:#5a3f0c;
+  --g-ptphqa-bg:#f5e0da;     --g-ptphqa-line:#c06a52;    --g-ptphqa-ink:#5c2717;
+  --g-feature-bg:#dfe8f2;    --g-feature-line:#5081b3;   --g-feature-ink:#1c3550;
+  --g-funcsw-bg:#e9e0f0;     --g-funcsw-line:#8c68b0;    --g-funcsw-ink:#3c2652;
+  --g-mouse-bg:#dcebee;      --g-mouse-line:#4791a3;     --g-mouse-ink:#153b43;
+}
+:root[data-theme="dark"]{
+  --paper:#12181a;
+  --paper-raised:#1a2225;
+  --ink:#e7ece9;
+  --ink-dim:#9aa8a3;
+  --line:#37423f;
+  --accent:#4fd8cb;
+  --accent-ink:#c9fbf3;
+  --hit-bg:rgba(79,216,203,0.22);
+
+  --g-touchpad-bg:#1f2a1a;  --g-touchpad-line:#7f9d68;  --g-touchpad-ink:#c3d9ac;
+  --g-maxcount-bg:#2c2413;  --g-maxcount-line:#c69641;  --g-maxcount-ink:#eccf94;
+  --g-ptphqa-bg:#2c1c17;    --g-ptphqa-line:#c06a52;    --g-ptphqa-ink:#f0b7a3;
+  --g-feature-bg:#182430;   --g-feature-line:#5081b3;   --g-feature-ink:#aecbea;
+  --g-funcsw-bg:#221c2c;    --g-funcsw-line:#8c68b0;    --g-funcsw-ink:#d3bbef;
+  --g-mouse-bg:#152528;     --g-mouse-line:#4791a3;     --g-mouse-ink:#a9dbe4;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#12181a;
+    --paper-raised:#1a2225;
+    --ink:#e7ece9;
+    --ink-dim:#9aa8a3;
+    --line:#37423f;
+    --accent:#4fd8cb;
+    --accent-ink:#c9fbf3;
+    --hit-bg:rgba(79,216,203,0.22);
+
+    --g-touchpad-bg:#1f2a1a;  --g-touchpad-line:#7f9d68;  --g-touchpad-ink:#c3d9ac;
+    --g-maxcount-bg:#2c2413;  --g-maxcount-line:#c69641;  --g-maxcount-ink:#eccf94;
+    --g-ptphqa-bg:#2c1c17;    --g-ptphqa-line:#c06a52;    --g-ptphqa-ink:#f0b7a3;
+    --g-feature-bg:#182430;   --g-feature-line:#5081b3;   --g-feature-ink:#aecbea;
+    --g-funcsw-bg:#221c2c;    --g-funcsw-line:#8c68b0;    --g-funcsw-ink:#d3bbef;
+    --g-mouse-bg:#152528;     --g-mouse-line:#4791a3;     --g-mouse-ink:#a9dbe4;
+  }
+}
+
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0; background:var(--paper); color:var(--ink); font-family:var(--sans);
+  display:flex; flex-direction:column; min-height:100vh;
+}
+header{
+  padding:18px 22px 14px; border-bottom:1px solid var(--line); flex:none;
+}
+header h1{
+  margin:0 0 4px; font-size:1.15rem; font-weight:700; letter-spacing:.01em; text-wrap:balance;
+}
+header p{margin:0; color:var(--ink-dim); font-size:.85rem;}
+
+.workbench{
+  flex:1; display:grid; grid-template-columns:var(--left-w, 380px) 6px 1fr; min-height:0;
+}
+@media (max-width:860px){
+  .workbench{grid-template-columns:1fr; grid-template-rows:auto auto;}
+}
+
+.pane-input{
+  display:flex; flex-direction:column; gap:10px; padding:16px;
+  min-height:0;
+}
+
+.resizer{
+  cursor:col-resize; background:var(--line); touch-action:none;
+}
+.resizer:hover, .resizer.dragging{background:var(--accent);}
+@media (max-width:860px){ .resizer{display:none;} .pane-input{border-bottom:1px solid var(--line);} }
+
+.pane-input .label-row{
+  display:flex; align-items:baseline; justify-content:space-between; gap:8px;
+}
+.eyebrow{
+  font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-dim); font-weight:600;
+}
+.editor-wrap{
+  position:relative; flex:1; min-height:260px; border-radius:6px;
+  border:1px solid var(--line); background:var(--paper-raised); overflow:hidden;
+}
+.editor-wrap:focus-within{outline:2px solid var(--accent); outline-offset:1px;}
+#srcOverlay, textarea#src{
+  position:absolute; inset:0; margin:0; width:100%; height:100%; padding:12px;
+  font-family:var(--mono); font-size:.78rem; line-height:1.5; tab-size:2;
+  white-space:pre; overflow:auto; box-sizing:border-box; border:none; border-radius:6px;
+}
+#srcOverlay{pointer-events:none; color:transparent; background:transparent;}
+textarea#src{background:transparent; color:var(--ink); resize:none;}
+.src-line{display:inline-block; min-height:1em;}
+.src-line.hit{
+  background:var(--hit-bg);
+  box-shadow:9999px 0 0 var(--hit-bg), -9999px 0 0 var(--hit-bg);
+}
+
+.btn-row{display:flex; gap:8px; flex-wrap:wrap;}
+button{
+  font-family:var(--sans); font-size:.8rem; font-weight:600; cursor:pointer;
+  border-radius:6px; padding:8px 14px; border:1px solid var(--line); background:var(--paper-raised); color:var(--ink);
+}
+button:hover{border-color:var(--accent);}
+button:focus-visible{outline:2px solid var(--accent); outline-offset:1px;}
+button.primary{background:var(--accent); color:#04231f; border-color:var(--accent);}
+:root[data-theme="dark"] button.primary,
+@media (prefers-color-scheme:dark){ button.primary{color:#04231f;} }
+
+.status{font-size:.76rem; color:var(--ink-dim); min-height:1.2em;}
+.status.err{color:var(--g-ptphqa-line);}
+
+.pane-output{
+  padding:18px 20px 40px; overflow-y:auto; min-height:0;
+}
+
+.tree-block{
+  margin-bottom:22px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised);
+  padding:14px 16px;
+}
+.tree-block > .eyebrow{margin-bottom:10px; display:block;}
+.tree-node{
+  border-left:2px solid var(--line); margin-left:6px; padding-left:12px; margin-top:8px;
+}
+.tree-node .node-label{
+  font-family:var(--mono); font-size:.78rem;
+}
+.tree-node .node-label .ctype{font-weight:700;}
+.tree-node .node-label .usage{color:var(--ink-dim);}
+.tree-fields{list-style:none; margin:6px 0 0; padding:0; font-family:var(--mono); font-size:.72rem; color:var(--ink-dim);}
+.tree-fields li{padding:1px 0;}
+.tree-fields li[data-lines]{cursor:pointer; border-radius:3px;}
+.tree-fields li[data-lines]:hover, .tree-fields li[data-lines].row-hit{background:var(--hit-bg);}
+.tree-node .node-label[data-lines]{cursor:pointer; border-radius:3px;}
+.tree-node .node-label[data-lines]:hover, .tree-node .node-label[data-lines].row-hit{background:var(--hit-bg);}
+.tree-fields li b{color:var(--ink);}
+
+.cards{
+  display:flex; flex-direction:column; gap:18px;
+}
+.card{
+  border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--paper-raised);
+}
+.card-head{
+  padding:9px 14px; font-weight:700; font-size:.82rem; letter-spacing:.01em;
+  display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:baseline;
+}
+.card-head .rid{font-family:var(--mono); font-weight:600; font-size:.74rem; opacity:.85;}
+.table-scroll{overflow-x:auto;}
+table{width:100%; border-collapse:collapse; font-size:.76rem;}
+thead th{
+  text-align:left; padding:7px 10px; font-size:.66rem; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--ink-dim); border-bottom:1px solid var(--line); white-space:nowrap; font-weight:700;
+}
+tbody td{
+  padding:6px 10px; border-bottom:1px solid var(--line); font-family:var(--mono); white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr[data-lines]{cursor:pointer;}
+tbody tr[data-lines]:hover, tbody tr[data-lines].row-hit{background:var(--hit-bg);}
+tbody td.field-name{font-family:var(--sans); font-weight:600; white-space:normal;}
+td.dim, span.dim{color:var(--ink-dim);}
+tbody tr.padding-row td.field-name{font-style:italic; color:var(--ink-dim); font-family:var(--sans); font-weight:500;}
+
+.legend{
+  margin-top:20px; border-top:1px dashed var(--line); padding-top:12px; font-size:.72rem; color:var(--ink-dim);
+  display:flex; flex-wrap:wrap; gap:12px 18px;
+}
+.legend .swatch{display:inline-flex; align-items:center; gap:6px;}
+.legend .swatch i{width:11px; height:11px; border-radius:3px; display:inline-block; border:1px solid var(--line);}
+.empty-note{color:var(--ink-dim); font-size:.85rem; padding:30px 4px;}
+
+.theme-toggle{
+  border:1px solid var(--line); background:var(--paper-raised); color:var(--ink);
+  border-radius:6px; padding:6px 12px; font-size:.76rem; font-weight:600; cursor:pointer; flex:none;
+}
+.theme-toggle:hover{border-color:var(--accent);}
+
+.header-controls{display:flex; align-items:center; gap:14px; flex:none;}
+.hit-color-control{display:flex; align-items:center; gap:6px;}
+.hit-color-control label{font-size:.72rem; color:var(--ink-dim); font-weight:600; white-space:nowrap;}
+.hit-color-control input[type="color"]{
+  width:28px; height:28px; padding:2px; border:1px solid var(--line); border-radius:6px;
+  background:var(--paper-raised); cursor:pointer;
+}
+.hit-color-control input[type="color"]:hover{border-color:var(--accent);}
+.hit-color-control input[type="color"]::-webkit-color-swatch-wrapper{padding:2px;}
+.hit-color-control input[type="color"]::-webkit-color-swatch{border:none; border-radius:3px;}
+</style>
+
+<header>
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
+    <div>
+      <h1>HID Report Descriptor Decoder</h1>
+      <p>Paste a raw report-descriptor byte listing on the left — collections, reports, and bit-fields decode on the right.</p>
+    </div>
+    <div class="header-controls">
+      <div class="hit-color-control">
+        <label for="hitColorPicker">Highlight</label>
+        <input type="color" id="hitColorPicker" value="#1f8f86" aria-label="Highlight color">
+      </div>
+      <button class="theme-toggle" id="themeToggle" type="button">Dark theme</button>
+    </div>
+  </div>
+</header>
+
+<div class="workbench">
+  <div class="pane-input" id="paneInput">
+    <div class="label-row">
+      <span class="eyebrow">Descriptor source</span>
+    </div>
+    <div class="editor-wrap">
+      <pre id="srcOverlay" aria-hidden="true"></pre>
+      <textarea id="src" spellcheck="false"></textarea>
+    </div>
+    <div class="btn-row">
+      <button class="primary" id="parseBtn">Parse</button>
+      <button id="sampleBtn">Load sample</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+  <div class="resizer" id="resizer"></div>
+  <div class="pane-output" id="output"></div>
+</div>
+
+<script>
+const SAMPLE = String.raw`
+//TOUCH PAD input TLC
+    0x05, 0x0d,                         // USAGE_PAGE (Digitizers)
+    0x09, 0x05,                         // USAGE (Touch Pad)
+    0xa1, 0x01,                         // COLLECTION (Application)
+    0x85, REPORTID_TOUCHPAD,            //   REPORT_ID (Touch pad)
+    0x09, 0x22,                         //   USAGE (Finger)
+    0xa1, 0x02,                         //   COLLECTION (Logical)
+    0x15, 0x00,                         //       LOGICAL_MINIMUM (0)
+    0x25, 0x01,                         //       LOGICAL_MAXIMUM (1)
+    0x09, 0x47,                         //       USAGE (Confidence)
+    0x09, 0x42,                         //       USAGE (Tip switch)
+    0x95, 0x02,                         //       REPORT_COUNT (2)
+    0x75, 0x01,                         //       REPORT_SIZE (1)
+    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
+    0x95, 0x01,                         //       REPORT_COUNT (1)
+    0x75, 0x02,                         //       REPORT_SIZE (2)
+    0x25, 0x02,                         //       LOGICAL_MAXIMUM (2)
+    0x09, 0x51,                         //       USAGE (Contact Identifier)
+    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
+    0x75, 0x01,                         //       REPORT_SIZE (1)
+    0x95, 0x04,                         //       REPORT_COUNT (4)
+    0x81, 0x03,                         //       INPUT (Cnst,Var,Abs)
+    0x05, 0x01,                         //       USAGE_PAGE (Generic Desk..
+    0x15, 0x00,                         //       LOGICAL_MINIMUM (0)
+    0x26, 0xff, 0x0f,                   //       LOGICAL_MAXIMUM (4095)
+    0x75, 0x10,                         //       REPORT_SIZE (16)
+    0x55, 0x0e,                         //       UNIT_EXPONENT (-2)
+    0x65, 0x13,                         //       UNIT(Inch,EngLinear)
+    0x09, 0x30,                         //       USAGE (X)
+    0x35, 0x00,                         //       PHYSICAL_MINIMUM (0)
+    0x46, 0x90, 0x01,                   //       PHYSICAL_MAXIMUM (400)
+    0x95, 0x01,                         //       REPORT_COUNT (1)
+    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
+    0x46, 0x13, 0x01,                   //       PHYSICAL_MAXIMUM (275)
+    0x09, 0x31,                         //       USAGE (Y)
+    0x81, 0x02,                         //       INPUT (Data,Var,Abs)
+    0xc0,                               //    END_COLLECTION
+    0x55, 0x0C,                         //    UNIT_EXPONENT (-4)
+    0x66, 0x01, 0x10,                   //    UNIT (Seconds)
+    0x47, 0xff, 0xff, 0x00, 0x00,       //    PHYSICAL_MAXIMUM (65535)
+    0x27, 0xff, 0xff, 0x00, 0x00,       //    LOGICAL_MAXIMUM (65535)
+    0x75, 0x10,                         //    REPORT_SIZE (16)
+    0x95, 0x01,                         //    REPORT_COUNT (1)
+    0x05, 0x0d,                         //    USAGE_PAGE (Digitizers)
+    0x09, 0x56,                         //    USAGE (Scan Time)
+    0x81, 0x02,                         //    INPUT (Data,Var,Abs)
+    0x09, 0x54,                         //    USAGE (Contact count)
+    0x25, 0x7f,                         //    LOGICAL_MAXIMUM (127)
+    0x95, 0x01,                         //    REPORT_COUNT (1)
+    0x75, 0x08,                         //    REPORT_SIZE (8)
+    0x81, 0x02,                         //    INPUT (Data,Var,Abs)
+    0x05, 0x09,                         //    USAGE_PAGE (Button)
+    0x09, 0x01,                         //    USAGE_(Button 1)
+    0x09, 0x02,                         //    USAGE_(Button 2)
+    0x09, 0x03,                         //    USAGE_(Button 3)
+    0x25, 0x01,                         //    LOGICAL_MAXIMUM (1)
+    0x75, 0x01,                         //    REPORT_SIZE (1)
+    0x95, 0x03,                         //    REPORT_COUNT (3)
+    0x81, 0x02,                         //    INPUT (Data,Var,Abs)
+    0x95, 0x05,                         //    REPORT_COUNT (5)
+    0x81, 0x03,                         //    INPUT (Cnst,Var,Abs)
+    0x05, 0x0d,                         //    USAGE_PAGE (Digitizer)
+    0x85, REPORTID_MAX_COUNT,           //   REPORT_ID (Feature)
+    0x09, 0x55,                         //    USAGE (Contact Count Maximum)
+    0x09, 0x59,                         //    USAGE (Pad TYpe)
+    0x75, 0x04,                         //    REPORT_SIZE (4)
+    0x95, 0x02,                         //    REPORT_COUNT (2)
+    0x25, 0x0f,                         //    LOGICAL_MAXIMUM (15)
+    0xb1, 0x02,                         //    FEATURE (Data,Var,Abs)
+    0x06, 0x00, 0xff,                   //    USAGE_PAGE (Vendor Defined)
+    0x85, REPORTID_PTPHQA,              //    REPORT_ID (PTPHQA)
+    0x09, 0xC5,                         //    USAGE (Vendor Usage 0xC5)
+    0x15, 0x00,                         //    LOGICAL_MINIMUM (0)
+    0x26, 0xff, 0x00,                   //    LOGICAL_MAXIMUM (0xff)
+    0x75, 0x08,                         //    REPORT_SIZE (8)
+    0x96, 0x00, 0x01,                   //    REPORT_COUNT (0x100 (256))
+    0xb1, 0x02,                         //    FEATURE (Data,Var,Abs)
+    0xc0,                               // END_COLLECTION
+    //CONFIG TLC
+    0x05, 0x0d,                         //    USAGE_PAGE (Digitizer)
+    0x09, 0x0E,                         //    USAGE (Configuration)
+    0xa1, 0x01,                         //   COLLECTION (Application)
+    0x85, REPORTID_FEATURE,             //   REPORT_ID (Feature)
+    0x09, 0x22,                         //   USAGE (Finger)
+    0xa1, 0x02,                         //   COLLECTION (logical)
+    0x09, 0x52,                         //    USAGE (Input Mode)
+    0x15, 0x00,                         //    LOGICAL_MINIMUM (0)
+    0x25, 0x0a,                         //    LOGICAL_MAXIMUM (10)
+    0x75, 0x08,                         //    REPORT_SIZE (8)
+    0x95, 0x01,                         //    REPORT_COUNT (1)
+    0xb1, 0x02,                         //    FEATURE (Data,Var,Abs
+    0xc0,                               //   END_COLLECTION
+    0x09, 0x22,                         //   USAGE (Finger)
+    0xa1, 0x00,                         //   COLLECTION (physical)
+    0x85, REPORTID_FUNCTION_SWITCH,     //     REPORT_ID (Feature)
+    0x09, 0x57,                         //     USAGE(Surface switch)
+    0x09, 0x58,                         //     USAGE(Button switch)
+    0x75, 0x01,                         //     REPORT_SIZE (1)
+    0x95, 0x02,                         //     REPORT_COUNT (2)
+    0x25, 0x01,                         //     LOGICAL_MAXIMUM (1)
+    0xb1, 0x02,                         //     FEATURE (Data,Var,Abs)
+    0x95, 0x06,                         //     REPORT_COUNT (6)
+    0xb1, 0x03,                         //     FEATURE (Cnst,Var,Abs)
+    0xc0,                               //   END_COLLECTION
+    0xc0,                               // END_COLLECTION
+    //MOUSE TLC
+    0x05, 0x01,                         // USAGE_PAGE (Generic Desktop)
+    0x09, 0x02,                         // USAGE (Mouse)
+    0xa1, 0x01,                         // COLLECTION (Application)
+    0x85, REPORTID_MOUSE,               //   REPORT_ID (Mouse)
+    0x09, 0x01,                         //   USAGE (Pointer)
+    0xa1, 0x00,                         //   COLLECTION (Physical)
+    0x05, 0x09,                         //     USAGE_PAGE (Button)
+    0x19, 0x01,                         //     USAGE_MINIMUM (Button 1)
+    0x29, 0x02,                         //     USAGE_MAXIMUM (Button 2)
+    0x25, 0x01,                         //     LOGICAL_MAXIMUM (1)
+    0x75, 0x01,                         //     REPORT_SIZE (1)
+    0x95, 0x02,                         //     REPORT_COUNT (2)
+    0x81, 0x02,                         //     INPUT (Data,Var,Abs)
+    0x95, 0x06,                         //     REPORT_COUNT (6)
+    0x81, 0x03,                         //     INPUT (Cnst,Var,Abs)
+    0x05, 0x01,                         //     USAGE_PAGE (Generic Desktop)
+    0x09, 0x30,                         //     USAGE (X)
+    0x09, 0x31,                         //     USAGE (Y)
+    0x75, 0x10,                         //     REPORT_SIZE (16)
+    0x95, 0x02,                         //     REPORT_COUNT (2)
+    0x25, 0x0a,                         //     LOGICAL_MAXIMUM (10)
+    0x81, 0x06,                         //     INPUT (Data,Var,Rel)
+    0xc0,                               //   END_COLLECTION
+    0xc0,                               //END_COLLECTION
+`.trim();
+
+// ---------- lookups ----------
+const MAIN_TAGS = {8:'Input',9:'Output',10:'Collection',11:'Feature',12:'EndCollection'};
+const GLOBAL_TAGS = {0:'UsagePage',1:'LogicalMinimum',2:'LogicalMaximum',3:'PhysicalMinimum',4:'PhysicalMaximum',
+                     5:'UnitExponent',6:'Unit',7:'ReportSize',8:'ReportID',9:'ReportCount',10:'Push',11:'Pop'};
+const LOCAL_TAGS = {0:'Usage',1:'UsageMinimum',2:'UsageMaximum',3:'DesignatorIndex',4:'DesignatorMinimum',
+                    5:'DesignatorMaximum',7:'StringIndex',8:'StringMinimum',9:'StringMaximum',10:'Delimiter'};
+const COLLECTION_TYPES = {0:'Physical',1:'Application',2:'Logical',3:'Report',4:'Named Array',5:'Usage Switch',6:'Usage Modifier'};
+
+const USAGE_NAMES = {
+  0x01: {0x01:'Pointer',0x02:'Mouse',0x30:'X',0x31:'Y'},
+  0x0D: {0x05:'Touch Pad',0x0E:'Configuration',0x22:'Finger',0x42:'Tip Switch',0x47:'Confidence',
+         0x48:'Width',0x49:'Height',0x51:'Contact Identifier',0x52:'Input Mode',0x54:'Contact Count',
+         0x55:'Contact Count Maximum',0x56:'Scan Time',0x57:'Surface Switch',0x58:'Button Switch',
+         0x59:'Pad Type',0x60:'Latency Mode',0xB0:'Button Press Threshold'},
+  0x0E: {0x01:'Simple Haptics Controller',0x23:'Intensity'},
+};
+// Well-known vendor usages from Microsoft's Precision Touchpad "PTPHQA" device-
+// certification report -- not part of the HID spec, but documented and worth naming.
+const PTPHQA_VENDOR_USAGES = {0xC5:'Vendor Data (PTPHQA Blob)',0xC6:'Segment Number',0xC7:'Segment Data'};
+const UNIT_SYMBOL_NAMES = {'in':'Inch','s':'Seconds','g':'Gram'};
+
+const PALETTE = ['touchpad','maxcount','ptphqa','feature','funcsw','mouse'];
+
+function pageStr(page){
+  if (page===null || page===undefined) return '—';
+  return page>0xFF ? ('0x'+page.toString(16).toUpperCase().padStart(4,'0')) : ('0x'+page.toString(16).toUpperCase().padStart(2,'0'));
+}
+function usageStr(uid){
+  if (uid===null || uid===undefined) return '—';
+  return '0x'+uid.toString(16).toUpperCase().padStart(2,'0');
+}
+function usageDisplayName(page, uid){
+  if (uid===null || uid===undefined) return 'Padding';
+  if (page===0x09) return `Button ${uid}`;
+  if (page!==null && page>=0xFF00) return PTPHQA_VENDOR_USAGES[uid] || 'Vendor Data';
+  const table = USAGE_NAMES[page];
+  if (table && table[uid]) return table[uid];
+  return `Usage ${usageStr(uid)}`;
+}
+function collectionUsageName(page, uid){
+  if (uid===null || uid===undefined) return page!==null ? `Usage Page ${pageStr(page)}` : '';
+  return usageDisplayName(page, uid);
+}
+
+function signExtend(raw, nbytes){
+  if (nbytes===1 && raw>=0x80) return raw-0x100;
+  if (nbytes===2 && raw>=0x8000) return raw-0x10000;
+  if (nbytes===4 && raw>=0x80000000) return raw-0x100000000;
+  return raw;
+}
+
+function decodeUnit(unitVal, exponent){
+  if (!unitVal) return null;
+  const systemCode = unitVal & 0xF;
+  const SYS = {1:'SI Linear',2:'SI Rotation',3:'English Linear',4:'English Rotation'};
+  const system = SYS[systemCode];
+  if (!system) return exponent ? `0x${unitVal.toString(16)} (10^${exponent})` : `0x${unitVal.toString(16)}`;
+  const symbols = {
+    'SI Linear':      ['cm','g','s','K','A','cd'],
+    'SI Rotation':    ['rad','g','s','K','A','cd'],
+    'English Linear': ['in','slug','s','F','A','cd'],
+    'English Rotation':['deg','slug','s','F','A','cd'],
+  }[system];
+  const parts = [];
+  for (let idx=0; idx<6; idx++){
+    const nibble = (unitVal >> (4*(idx+1))) & 0xF;
+    if (nibble===0) continue;
+    const exp = nibble>7 ? nibble-16 : nibble;
+    parts.push(exp===1 ? symbols[idx] : `${symbols[idx]}^${exp}`);
+  }
+  let label = parts.join('·');
+  label = UNIT_SYMBOL_NAMES[label] || label;
+  if (!label) return null;
+  if (exponent) label += ` (10^${exponent})`;
+  return label;
+}
+
+function typeLabel(mainName, flags){
+  const isConst = !!(flags & 0x1);
+  const isRel = !!(flags & 0x4);
+  if (mainName==='Feature') return isConst ? 'Feature (Const)' : 'Feature';
+  let label = isConst ? 'Const' : 'Data';
+  if (isRel && !isConst) label += ' (Relative)';
+  return label;
+}
+
+// ---------- tokenizer ----------
+function tokenize(text){
+  const tokens = [];
+  const rawLines = text.split('\n');
+  for (let ln=0; ln<rawLines.length; ln++){
+    const cIdx = rawLines[ln].indexOf('//');
+    const line = cIdx===-1 ? rawLines[ln] : rawLines[ln].slice(0, cIdx);
+    const re = /0[xX][0-9a-fA-F]+|[A-Za-z_][A-Za-z0-9_]*/g;
+    let m;
+    while ((m = re.exec(line))){
+      const tok = m[0];
+      if (/^0[xX][0-9a-fA-F]+$/.test(tok)){
+        tokens.push({type:'num', value: parseInt(tok,16), line: ln+1});
+      } else if (/^[A-Z][A-Z0-9_]*$/.test(tok)){
+        tokens.push({type:'sym', value: tok, line: ln+1});
+      }
+    }
+  }
+  return tokens;
+}
+
+// ---------- field expansion ----------
+function expandFields(usages, usageMin, usageMax, count, currentPage){
+  let list = usages.map(u=>({page:u.page, uid:u.uid, line:u.line}));
+  if (list.length===0 && usageMin!==null && usageMax!==null){
+    const page = usageMin.page===usageMax.page ? usageMin.page : currentPage;
+    for (let u=usageMin.uid; u<=usageMax.uid; u++) list.push({page, uid: u, line: usageMin.line});
+  }
+  if (list.length===0) return [[null, count]];
+  if (list.length < count){
+    const last = list[list.length-1];
+    while (list.length < count) list.push({page:last.page, uid:last.uid, line:last.line});
+  } else if (list.length > count){
+    list = list.slice(0, count);
+  }
+  const rows = [];
+  let idx = 0;
+  while (idx < list.length){
+    let j = idx;
+    while (j+1 < list.length && list[j+1].page===list[idx].page && list[j+1].uid===list[idx].uid) j++;
+    rows.push([list[idx], j-idx+1]);
+    idx = j+1;
+  }
+  return rows;
+}
+
+// ---------- main parser ----------
+function parseDescriptor(text){
+  const tokens = tokenize(text);
+  const state = {
+    usagePage:null, logicalMin:0, logicalMax:0, physicalMin:0, physicalMax:0,
+    unitExponent:0, unit:0, reportSize:0, reportCount:0, reportId:null,
+    physicalDefined:false, unitDefined:false,
+  };
+  let globalStack = [];
+  let usages = [], usageMin = null, usageMax = null;
+  let collectionStack = [];
+  const root = [];
+  let appNameStack = [];
+  const reportGroups = new Map();
+  const groupOrder = [];
+
+  function currentParent(){ return collectionStack.length ? collectionStack[collectionStack.length-1].children : root; }
+
+  let i = 0;
+  while (i < tokens.length){
+    const prefixTok = tokens[i++];
+    if (prefixTok.type !== 'num') continue;
+    const prefix = prefixTok.value;
+    const itemLine = prefixTok.line;
+    if (prefix === 0xFE){
+      const dataSize = (tokens[i] && tokens[i].value) || 0; i++;
+      i++; // long item tag byte
+      i += dataSize;
+      continue;
+    }
+    const sizeCode = prefix & 0x03;
+    const size = [0,1,2,4][sizeCode];
+    const typeCode = (prefix >> 2) & 0x03;
+    const tag = (prefix >> 4) & 0x0F;
+    const dataToks = tokens.slice(i, i+size);
+    i += size;
+
+    let rawValue = 0, symbol = null;
+    if (size > 0){
+      if (dataToks.length===1 && dataToks[0].type==='sym'){
+        symbol = dataToks[0].value;
+      } else {
+        for (let k=0; k<dataToks.length; k++){
+          rawValue += (dataToks[k].value||0) * Math.pow(256,k);
+        }
+      }
+    }
+
+    if (typeCode===1){ // Global
+      const name = GLOBAL_TAGS[tag];
+      if (name==='UsagePage') state.usagePage = rawValue;
+      else if (name==='LogicalMinimum'){ state.logicalMin = signExtend(rawValue,size); }
+      else if (name==='LogicalMaximum'){ state.logicalMax = signExtend(rawValue,size); }
+      else if (name==='PhysicalMinimum'){ state.physicalMin = signExtend(rawValue,size); state.physicalDefined = true; }
+      else if (name==='PhysicalMaximum'){ state.physicalMax = signExtend(rawValue,size); state.physicalDefined = true; }
+      else if (name==='UnitExponent'){ let v = rawValue & 0xF; if (v>7) v-=16; state.unitExponent = v; state.unitDefined = true; }
+      else if (name==='Unit'){ state.unit = rawValue; state.unitDefined = true; }
+      else if (name==='ReportSize') state.reportSize = rawValue;
+      else if (name==='ReportCount') state.reportCount = rawValue;
+      else if (name==='ReportID') state.reportId = symbol!==null ? symbol : rawValue;
+      else if (name==='Push') globalStack.push(JSON.parse(JSON.stringify(state)));
+      else if (name==='Pop'){ if (globalStack.length) Object.assign(state, globalStack.pop()); }
+    } else if (typeCode===2){ // Local
+      const name = LOCAL_TAGS[tag];
+      if (name==='Usage'){
+        if (size===4){ const page=(rawValue>>>16)&0xFFFF; const uid=rawValue&0xFFFF; usages.push({page,uid,line:itemLine}); }
+        else usages.push({page: state.usagePage, uid: rawValue, line:itemLine});
+      } else if (name==='UsageMinimum'){
+        usageMin = size===4 ? {page:(rawValue>>>16)&0xFFFF, uid:rawValue&0xFFFF, line:itemLine} : {page:state.usagePage, uid:rawValue, line:itemLine};
+      }
+      else if (name==='UsageMaximum'){
+        usageMax = size===4 ? {page:(rawValue>>>16)&0xFFFF, uid:rawValue&0xFFFF, line:itemLine} : {page:state.usagePage, uid:rawValue, line:itemLine};
+      }
+    } else if (typeCode===0){ // Main
+      const name = MAIN_TAGS[tag];
+      if (name==='Collection'){
+        const ctypeName = COLLECTION_TYPES[rawValue] || `Reserved (0x${rawValue.toString(16)})`;
+        const entry = usages.length ? usages[0] : usageMin;
+        const node = { kind:'collection', ctype: ctypeName, usagePage: entry?entry.page:null, usageId: entry?entry.uid:null, children: [], line: itemLine };
+        currentParent().push(node);
+        collectionStack.push(node);
+        if (ctypeName==='Application'){ node.isApp = true; appNameStack.push(collectionUsageName(node.usagePage, node.usageId)); }
+        usages = []; usageMin = null; usageMax = null;
+      } else if (name==='EndCollection'){
+        const node = collectionStack.pop();
+        if (node && node.isApp) appNameStack.pop();
+        usages = []; usageMin = null; usageMax = null;
+      } else if (name==='Input' || name==='Output' || name==='Feature'){
+        const flags = rawValue;
+        const rows = expandFields(usages, usageMin, usageMax, state.reportCount, state.usagePage);
+        const physValid = state.physicalDefined;
+        const unitValid = state.unitDefined;
+        const fieldRows = rows.map(([u,cnt])=>{
+          const lineSet = new Set();
+          if (u && u.line) lineSet.add(u.line);
+          lineSet.add(itemLine);
+          return {
+            usagePage: u ? u.page : null,
+            usageId: u ? u.uid : null,
+            name: usageDisplayName(u?u.page:null, u?u.uid:null),
+            size: state.reportSize,
+            count: cnt,
+            logicalMin: state.logicalMin,
+            logicalMax: state.logicalMax,
+            physicalMin: physValid ? state.physicalMin : null,
+            physicalMax: physValid ? state.physicalMax : null,
+            unitLabel: unitValid ? decodeUnit(state.unit, state.unitExponent) : null,
+            type: typeLabel(name, flags),
+            lines: Array.from(lineSet).sort((a,b)=>a-b),
+          };
+        });
+        const idLabel = state.reportId===null ? '—' : (typeof state.reportId==='string' ? state.reportId : usageStr(state.reportId));
+        const groupKey = idLabel + '|' + name;
+        if (!reportGroups.has(groupKey)){
+          reportGroups.set(groupKey, { reportId: idLabel, mainType: name, appName: appNameStack[appNameStack.length-1] || '', rows: [] });
+          groupOrder.push(groupKey);
+        }
+        reportGroups.get(groupKey).rows.push(...fieldRows);
+        const parentNode = collectionStack[collectionStack.length-1];
+        if (parentNode){
+          parentNode.fields = parentNode.fields || [];
+          parentNode.fields.push(...fieldRows.map(r=>({name:r.name, size:r.size, count:r.count, lines:r.lines})));
+        }
+        usages = []; usageMin = null; usageMax = null;
+      }
+    }
+  }
+
+  const groups = groupOrder.map((k,idx)=>({ ...reportGroups.get(k), order: idx+1 }));
+  return { root, groups };
+}
+
+// ---------- rendering ----------
+function esc(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function renderTreeNode(node){
+  const label = node.usageId!==null && node.usageId!==undefined
+    ? `<span class="ctype">${esc(node.ctype)} Collection</span> <span class="usage">— ${esc(pageStr(node.usagePage))} ${esc(usageStr(node.usageId))} · ${esc(collectionUsageName(node.usagePage,node.usageId))}</span>`
+    : `<span class="ctype">${esc(node.ctype)} Collection</span>`;
+  let fieldsHtml = '';
+  if (node.fields && node.fields.length){
+    fieldsHtml = '<ul class="tree-fields">' + node.fields.map(f=>{
+      const c = f.count>1 ? ` &times;${f.count}` : '';
+      const linesAttr = f.lines && f.lines.length ? ` data-lines="${f.lines.join(',')}"` : '';
+      return `<li${linesAttr}><b>${esc(f.name)}</b> <span class="dim">(${f.size} bit${f.size===1?'':'s'}${c})</span></li>`;
+    }).join('') + '</ul>';
+  }
+  const childrenHtml = (node.children||[]).map(renderTreeNode).join('');
+  const nodeLinesAttr = node.line ? ` data-lines="${node.line}"` : '';
+  return `<div class="tree-node"><div class="node-label"${nodeLinesAttr}>${label}</div>${fieldsHtml}${childrenHtml}</div>`;
+}
+
+function groupPaletteKey(order){ return PALETTE[(order-1) % PALETTE.length]; }
+
+function fmt(v){ return (v===null || v===undefined) ? '<span class="dim">—</span>' : esc(v); }
+
+function renderGroup(g){
+  const pal = groupPaletteKey(g.order);
+  const title = `${g.appName ? esc(g.appName).toUpperCase()+' ' : ''}${g.mainType.toUpperCase()} REPORT`;
+  const rows = g.rows.map(r=>{
+    const isPad = r.usageId===null || r.usageId===undefined;
+    const linesAttr = r.lines && r.lines.length ? ` data-lines="${r.lines.join(',')}"` : '';
+    return `<tr class="${isPad?'padding-row':''}"${linesAttr}>
+      <td class="field-name">${esc(r.name)}</td>
+      <td>${isPad ? '<span class="dim">—</span>' : `(${esc(pageStr(r.usagePage))}) ${esc(usageStr(r.usageId))}`}</td>
+      <td>${r.size}</td>
+      <td>${r.count}</td>
+      <td>${fmt(r.logicalMin)}</td>
+      <td>${fmt(r.logicalMax)}</td>
+      <td>${fmt(r.physicalMin)}</td>
+      <td>${fmt(r.physicalMax)}</td>
+      <td>${fmt(r.unitLabel)}</td>
+      <td>${esc(r.type)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="card" style="--card-bg:var(--g-${pal}-bg); --card-line:var(--g-${pal}-line); --card-ink:var(--g-${pal}-ink);">
+    <div class="card-head" style="background:var(--card-bg); color:var(--card-ink); border-bottom:1px solid var(--card-line);">
+      <span>${g.order}) ${esc(title)}</span>
+      <span class="rid">Report ID: ${esc(g.reportId)}</span>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr>
+          <th>Field</th><th>Usage (Page)</th><th>Size (bits)</th><th>Count</th>
+          <th>Logical Min</th><th>Logical Max</th><th>Physical Min</th><th>Physical Max</th>
+          <th>Unit</th><th>Type</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function render(result){
+  const out = document.getElementById('output');
+  pinnedEl = null; hoverEl = null;
+  if (typeof setOverlayHighlight === 'function') setOverlayHighlight([]);
+  if (!result.groups.length && !result.root.length){
+    out.innerHTML = '<p class="empty-note">Nothing decoded yet — paste descriptor bytes on the left and hit Parse.</p>';
+    return;
+  }
+  const treeHtml = `<div class="tree-block"><span class="eyebrow">Collection tree</span>${result.root.map(renderTreeNode).join('')}</div>`;
+  const cardsHtml = `<div class="cards">${result.groups.map(renderGroup).join('')}</div>`;
+  const legendHtml = `<div class="legend">${result.groups.map(g=>{
+    const pal = groupPaletteKey(g.order);
+    return `<span class="swatch"><i style="background:var(--g-${pal}-line)"></i>${esc(g.reportId)} (${esc(g.mainType)})</span>`;
+  }).join('')}</div>`;
+  out.innerHTML = treeHtml + cardsHtml + legendHtml;
+}
+
+function runParse(){
+  const status = document.getElementById('status');
+  const src = document.getElementById('src').value;
+  try{
+    const result = parseDescriptor(src);
+    render(result);
+    const total = result.groups.reduce((a,g)=>a+g.rows.length,0);
+    status.className = 'status';
+    status.textContent = result.groups.length
+      ? `Decoded ${result.groups.length} report${result.groups.length===1?'':'s'}, ${total} field row${total===1?'':'s'}.`
+      : (result.root.length ? 'Collections found, but no Input/Output/Feature items yet.' : '');
+  } catch(err){
+    status.className = 'status err';
+    status.textContent = 'Parse error: ' + err.message;
+  }
+}
+
+document.getElementById('parseBtn').addEventListener('click', runParse);
+document.getElementById('sampleBtn').addEventListener('click', ()=>{ document.getElementById('src').value = SAMPLE; renderOverlay(); runParse(); });
+document.getElementById('clearBtn').addEventListener('click', ()=>{ document.getElementById('src').value=''; renderOverlay(); document.getElementById('status').textContent=''; document.getElementById('status').className='status'; render({root:[],groups:[]}); });
+document.getElementById('src').addEventListener('input', ()=>{ renderOverlay(); clearTimeout(window.__t); window.__t = setTimeout(runParse, 350); });
+
+// ---------- source overlay (line highlighting behind the textarea) ----------
+const srcEl = document.getElementById('src');
+const overlayEl = document.getElementById('srcOverlay');
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderOverlay(){
+  const lines = srcEl.value.split('\n');
+  overlayEl.innerHTML = lines.map((line, idx)=>`<span class="src-line" data-line="${idx+1}">${escHtml(line) || '\u00A0'}</span>`).join('\n');
+  syncOverlayScroll();
+}
+function syncOverlayScroll(){
+  overlayEl.scrollTop = srcEl.scrollTop;
+  overlayEl.scrollLeft = srcEl.scrollLeft;
+}
+srcEl.addEventListener('scroll', syncOverlayScroll);
+
+function setOverlayHighlight(lineNumbers){
+  overlayEl.querySelectorAll('.src-line.hit').forEach(el=>el.classList.remove('hit'));
+  lineNumbers.forEach(n=>{
+    const el = overlayEl.querySelector(`.src-line[data-line="${n}"]`);
+    if (el) el.classList.add('hit');
+  });
+}
+function scrollToLine(n){
+  const el = overlayEl.querySelector(`.src-line[data-line="${n}"]`);
+  if (!el) return;
+  const target = el.offsetTop - srcEl.clientHeight/2 + 10;
+  srcEl.scrollTo({top: Math.max(0, target), behavior:'smooth'});
+}
+function lineNumbersFromEl(el){
+  return (el.getAttribute('data-lines')||'').split(',').filter(Boolean).map(Number);
+}
+
+const outputEl = document.getElementById('output');
+let hoverEl = null;
+let pinnedEl = null;
+
+outputEl.addEventListener('mouseover', (e)=>{
+  const el = e.target.closest('[data-lines]');
+  if (!el || el===hoverEl) return;
+  hoverEl = el;
+  if (!pinnedEl) setOverlayHighlight(lineNumbersFromEl(el));
+});
+outputEl.addEventListener('mouseout', (e)=>{
+  const el = e.target.closest('[data-lines]');
+  if (!el || (e.relatedTarget && el.contains(e.relatedTarget))) return;
+  hoverEl = null;
+  setOverlayHighlight(pinnedEl ? lineNumbersFromEl(pinnedEl) : []);
+});
+outputEl.addEventListener('click', (e)=>{
+  const el = e.target.closest('[data-lines]');
+  if (!el) return;
+  if (pinnedEl === el){
+    pinnedEl.classList.remove('row-hit');
+    pinnedEl = null;
+    setOverlayHighlight(hoverEl ? lineNumbersFromEl(hoverEl) : []);
+    return;
+  }
+  if (pinnedEl) pinnedEl.classList.remove('row-hit');
+  pinnedEl = el;
+  el.classList.add('row-hit');
+  const lines = lineNumbersFromEl(el);
+  setOverlayHighlight(lines);
+  if (lines.length) scrollToLine(lines[0]);
+});
+
+const workbenchEl = document.querySelector('.workbench');
+const resizerEl = document.getElementById('resizer');
+(function initResizer(){
+  let dragging = false;
+  let savedWidth = null;
+  try{ savedWidth = localStorage.getItem('hid-decoder-left-width'); }catch(e){}
+  if (savedWidth) workbenchEl.style.setProperty('--left-w', savedWidth);
+
+  resizerEl.addEventListener('pointerdown', (e)=>{
+    dragging = true;
+    resizerEl.classList.add('dragging');
+    resizerEl.setPointerCapture(e.pointerId);
+  });
+  resizerEl.addEventListener('pointermove', (e)=>{
+    if (!dragging) return;
+    const rect = workbenchEl.getBoundingClientRect();
+    let w = e.clientX - rect.left;
+    w = Math.max(240, Math.min(w, rect.width - 280));
+    workbenchEl.style.setProperty('--left-w', w + 'px');
+  });
+  function stopDrag(e){
+    if (!dragging) return;
+    dragging = false;
+    resizerEl.classList.remove('dragging');
+    try{ localStorage.setItem('hid-decoder-left-width', workbenchEl.style.getPropertyValue('--left-w')); }catch(e){}
+  }
+  resizerEl.addEventListener('pointerup', stopDrag);
+  resizerEl.addEventListener('pointercancel', stopDrag);
+})();
+
+function hexToRgba(hex, alpha){
+  const clean = hex.replace('#','');
+  const bigint = parseInt(clean,16);
+  const r=(bigint>>16)&255, g=(bigint>>8)&255, b=bigint&255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function applyHitColor(hex){
+  document.documentElement.style.setProperty('--hit-bg', hexToRgba(hex, 0.28));
+  try{ localStorage.setItem('hid-decoder-hit-color', hex); }catch(e){}
+}
+document.getElementById('hitColorPicker').addEventListener('input', (e)=>applyHitColor(e.target.value));
+let savedHitColor = null;
+try{ savedHitColor = localStorage.getItem('hid-decoder-hit-color'); }catch(e){}
+if (savedHitColor){
+  document.getElementById('hitColorPicker').value = savedHitColor;
+  applyHitColor(savedHitColor);
+}
+
+function applyTheme(theme){
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('themeToggle').textContent = theme==='dark' ? 'Light theme' : 'Dark theme';
+  try{ localStorage.setItem('hid-decoder-theme', theme); }catch(e){}
+}
+document.getElementById('themeToggle').addEventListener('click', ()=>{
+  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+});
+let savedTheme = 'light';
+try{ savedTheme = localStorage.getItem('hid-decoder-theme') || 'light'; }catch(e){}
+applyTheme(savedTheme);
+
+document.getElementById('src').value = SAMPLE;
+renderOverlay();
+runParse();
+</script>
