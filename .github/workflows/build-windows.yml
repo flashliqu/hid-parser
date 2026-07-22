@@ -1,0 +1,41 @@
+name: Build Windows app
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "hid_ui.html"
+      - "windows/**"
+      - ".github/workflows/build-windows.yml"
+  pull_request:
+    paths:
+      - "hid_ui.html"
+      - "windows/**"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish Windows x64 app
+        shell: pwsh
+        run: .\windows\build.ps1
+
+      - name: Upload Windows app
+        uses: actions/upload-artifact@v4
+        with:
+          name: HID-Descriptor-Decoder-win-x64
+          path: artifacts/win-x64/HidDescriptorDecoder.exe
+          if-no-files-found: error

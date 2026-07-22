@@ -1,6 +1,10 @@
 __pycache__/
 *.pyc
 .claude/
+artifacts/
+windows/**/bin/
+windows/**/obj/
+HID-Descriptor-Decoder-Windows-*.zip
 
 # USB-IF spec PDF: its own license forbids external/public redistribution
 hid1_11.pdf

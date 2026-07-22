@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>HidDescriptorDecoder</AssemblyName>
+    <RootNamespace>HidDescriptorDecoder</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
+  </ItemGroup>
+
+  <!-- Keep hid_ui.html as the single source of truth for both the web and
+       Windows versions, but embed it so the published app is one .exe. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\hid_ui.html"
+                      LogicalName="HidDescriptorDecoder.Web.hid_ui.html" />
+  </ItemGroup>
+</Project>
