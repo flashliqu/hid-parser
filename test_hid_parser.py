@@ -4,6 +4,133 @@ from hid_parser import parse_descriptor
 
 
 class HidParserTests(unittest.TestCase):
+    def test_unsigned_logical_maximum_is_not_sign_extended(self):
+        descriptor = """
+            0x05, 0x01, 0x75, 0x08, 0x95, 0x01,
+            0x15, 0x00, 0x25, 0xff,
+            0x09, 0x30, 0x81, 0x02,
+        """
+
+        row = parse_descriptor(descriptor).groups[0].rows[0]
+
+        self.assertEqual(row.logical_max, 255)
+
+    def test_maximum_signedness_does_not_depend_on_declaration_order(self):
+        logical = parse_descriptor("""
+            0x25,0xff, 0x15,0xfe,
+            0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02,
+        """).groups[0].rows[0]
+        physical = parse_descriptor("""
+            0x15,0x00, 0x25,0xff, 0x45,0xff, 0x35,0xfe,
+            0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02,
+        """).groups[0].rows[0]
+
+        self.assertEqual((logical.logical_min, logical.logical_max), (-2, -1))
+        self.assertEqual((physical.physical_min, physical.physical_max), (-2, -1))
+
+    def test_decimal_bytes_and_malformed_hex_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Decimal byte literals are not supported"):
+            parse_descriptor("0x05, 0x01, 17, 0x09, 0x30")
+        with self.assertRaisesRegex(ValueError, "Malformed hexadecimal byte"):
+            parse_descriptor("0x05, 0xGG, 0x09, 0x30")
+        with self.assertRaisesRegex(ValueError, "Expected a byte"):
+            parse_descriptor("0x100")
+
+    def test_c_array_wrappers_and_integer_suffixes_are_accepted(self):
+        descriptor = """
+            static const unsigned char report_descriptor[10] = {
+                0x05u, 0x01UL, 0x75, 0x08, 0x95, 0x01,
+                0x09, 0x30, 0x81, 0x02,
+            };
+        """
+
+        row = parse_descriptor(descriptor).groups[0].rows[0]
+
+        self.assertEqual((row.usage_page, row.usage_id, row.size), (1, 0x30, 8))
+        with self.assertRaisesRegex(ValueError, "Decimal byte literals are not supported"):
+            parse_descriptor("unsigned char descriptor[2] = { 0x05, 1 };")
+
+    def test_errors_report_the_offending_line(self):
+        with self.assertRaisesRegex(ValueError, r"^Line 3: Expected a byte, got 0x100$"):
+            parse_descriptor("0x05, 0x01,\n0x09, 0x30,\n0x100,\n")
+
+    def test_discrete_usage_and_usage_range_are_combined(self):
+        descriptor = """
+            0x05, 0x01, 0x75, 0x08, 0x95, 0x03,
+            0x09, 0x30, 0x19, 0x31, 0x29, 0x32,
+            0x81, 0x02,
+        """
+
+        rows = parse_descriptor(descriptor).groups[0].rows
+
+        self.assertEqual([row.usage_id for row in rows], [0x30, 0x31, 0x32])
+
+    def test_usages_are_expanded_in_declaration_order(self):
+        descriptor = """
+            0x05, 0x01, 0x75, 0x08, 0x95, 0x03,
+            0x19, 0x31, 0x29, 0x32, 0x09, 0x30,
+            0x81, 0x02,
+        """
+
+        rows = parse_descriptor(descriptor).groups[0].rows
+
+        self.assertEqual([row.usage_id for row in rows], [0x31, 0x32, 0x30])
+
+    def test_array_keeps_the_whole_range_but_only_a_lone_range_collapses(self):
+        # Usage (0x00) plus Usage Minimum/Maximum 0x01-0x65: the array spans
+        # both, but 0x00 and the range are listed separately rather than folded
+        # into one 0x00-0x65 span.
+        row = parse_descriptor("""
+            0x05, 0x07, 0x75, 0x08, 0x95, 0x02,
+            0x09, 0x00, 0x19, 0x01, 0x29, 0x65,
+            0x81, 0x00,
+        """).groups[0].rows[0]
+
+        self.assertEqual((row.usage_id, row.usage_id_max, row.count), (0x00, None, 2))
+        self.assertEqual(row.usage_text, "(0x07) 0x00, (0x07) 0x01–0x65")
+
+        # A lone range still collapses to a single min-max field.
+        lone = parse_descriptor("""
+            0x05, 0x07, 0x75, 0x08, 0x95, 0x02,
+            0x19, 0x01, 0x29, 0x65, 0x81, 0x00,
+        """).groups[0].rows[0]
+
+        self.assertEqual((lone.usage_id, lone.usage_id_max, lone.count), (0x01, 0x65, 2))
+
+    def test_array_does_not_invent_usages_between_discrete_ones_and_a_range(self):
+        # Declared set is {0x00, 0x01} plus 0x04-0x65 -- 0x02 and 0x03 are not
+        # declared and must not appear inside a fabricated 0x00-0x65 span.
+        row = parse_descriptor("""
+            0x05, 0x07, 0x75, 0x08, 0x95, 0x03,
+            0x09, 0x00, 0x09, 0x01, 0x19, 0x04, 0x29, 0x65,
+            0x81, 0x00,
+        """).groups[0].rows[0]
+
+        self.assertIsNone(row.usage_id_max)
+        self.assertEqual(row.usage_text, "(0x07) 0x00, (0x07) 0x01, (0x07) 0x04–0x65")
+
+    def test_physical_extents_revert_as_a_pair_unless_both_are_defined(self):
+        descriptors = [
+            # Neither physical bound is defined.
+            "0x15,0x01, 0x25,0x0a, 0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02",
+            # An explicit zero pair restores the logical defaults.
+            "0x15,0x01, 0x25,0x0a, 0x35,0x00, 0x45,0x00, 0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02",
+            # Only Physical Maximum is defined, so per HID 1.11 section 6.2.2.7
+            # both extents revert to the logical ones.
+            "0x15,0x01, 0x25,0x0a, 0x45,0x64, 0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02",
+            # Only Physical Minimum is defined -- same pair rule.
+            "0x15,0x01, 0x25,0x0a, 0x35,0x02, 0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02",
+            # Both defined and not a zero pair: used as declared.
+            "0x15,0x01, 0x25,0x0a, 0x35,0x02, 0x45,0x64, 0x75,0x08, 0x95,0x01, 0x09,0x30, 0x81,0x02",
+        ]
+
+        extents = []
+        for descriptor in descriptors:
+            row = parse_descriptor(descriptor).groups[0].rows[0]
+            extents.append((row.physical_min, row.physical_max))
+
+        self.assertEqual(extents, [(1, 10), (1, 10), (1, 10), (1, 10), (2, 100)])
+
     def test_unit_and_physical_globals_persist_until_changed(self):
         descriptor = """
             0x05, 0x01,        // Usage Page (Generic Desktop)

@@ -505,17 +505,36 @@ function mergeLines(...groups){
 function tokenize(text){
   const tokens = [];
   const rawLines = text.split('\n');
+  const sourceLines = rawLines.map(line=>{
+    const cIdx = line.indexOf('//');
+    return cIdx===-1 ? line : line.slice(0, cIdx);
+  });
+  const hasInitializer = sourceLines.some(line=>line.includes('{'));
+  let braceDepth = 0;
   for (let ln=0; ln<rawLines.length; ln++){
-    const cIdx = rawLines[ln].indexOf('//');
-    const line = cIdx===-1 ? rawLines[ln] : rawLines[ln].slice(0, cIdx);
-    const re = /0[xX][0-9a-fA-F]+|[A-Za-z_][A-Za-z0-9_]*/g;
+    let line = sourceLines[ln];
+    if (hasInitializer){
+      let initializerText = '';
+      for (const char of line){
+        if (char==='{') braceDepth++;
+        else if (char==='}') braceDepth = Math.max(braceDepth-1, 0);
+        else if (braceDepth) initializerText += char;
+      }
+      line = initializerText;
+    }
+    const re = /0[xX][A-Za-z0-9_]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[A-Za-z_][A-Za-z0-9_]*/g;
     let m;
     while ((m = re.exec(line))){
       const tok = m[0];
-      if (/^0[xX][0-9a-fA-F]+$/.test(tok)){
-        const value = parseInt(tok,16);
+      if (/^0[xX]/.test(tok)){
+        const hexMatch = tok.match(/^0[xX]([0-9a-fA-F]+)(?:[uU](?:ll|LL|[lL])?|(?:ll|LL|[lL])[uU]?)?$/);
+        if (!hexMatch) descriptorError(`Malformed hexadecimal byte: ${tok}`, ln+1);
+        const value = parseInt(hexMatch[1],16);
         if (value>0xFF) descriptorError(`Expected a byte, got ${tok}`, ln+1);
         tokens.push({type:'num', value, line: ln+1});
+      } else if (/^[0-9]/.test(tok)){
+        if (!/^[0-9]+$/.test(tok)) descriptorError(`Malformed decimal byte: ${tok}`, ln+1);
+        descriptorError(`Decimal byte literals are not supported: ${tok}`, ln+1);
       } else if (/^[A-Z][A-Z0-9_]*$/.test(tok)){
         tokens.push({type:'sym', value: tok, line: ln+1});
       }
@@ -678,7 +697,8 @@ function expandFields(local, count, isArray, itemLines){
 function parseDescriptor(text){
   const tokens = tokenize(text);
   const state = {
-    usagePage:null, logicalMin:0, logicalMax:0, physicalMin:null, physicalMax:null,
+    usagePage:null, logicalMin:0, logicalMaxRaw:0, logicalMaxSize:0,
+    physicalMin:null, physicalMaxRaw:0, physicalMaxSize:0,
     unitExponent:0, unit:0, reportSize:0, reportCount:0, reportId:null,
     physicalMinDefined:false, physicalMaxDefined:false,
   };
@@ -736,13 +756,17 @@ function parseDescriptor(text){
       const name = GLOBAL_TAGS[tag];
       if (name==='UsagePage') state.usagePage = rawValue;
       else if (name==='LogicalMinimum'){ state.logicalMin = signExtend(rawValue,size); }
-      else if (name==='LogicalMaximum'){ state.logicalMax = state.logicalMin<0 ? signExtend(rawValue,size) : rawValue; }
+      else if (name==='LogicalMaximum'){
+        state.logicalMaxRaw = rawValue;
+        state.logicalMaxSize = size;
+      }
       else if (name==='PhysicalMinimum'){
         state.physicalMin = signExtend(rawValue,size);
         state.physicalMinDefined = true;
       }
       else if (name==='PhysicalMaximum'){
-        state.physicalMax = state.physicalMinDefined && state.physicalMin<0 ? signExtend(rawValue,size) : rawValue;
+        state.physicalMaxRaw = rawValue;
+        state.physicalMaxSize = size;
         state.physicalMaxDefined = true;
       }
       else if (name==='UnitExponent'){ let v = rawValue & 0xF; if (v>7) v-=16; state.unitExponent = v; }
@@ -825,15 +849,22 @@ function parseDescriptor(text){
         if (!Number.isSafeInteger(bitLength)) descriptorError('Report Size × Report Count is too large', prefixTok.line);
         reportOffsets.set(reportKey, reportOffset + bitLength);
 
-        const physicalDefault = !state.physicalMinDefined || !state.physicalMaxDefined ||
-          (state.physicalMin===0 && state.physicalMax===0);
-        const physicalMin = physicalDefault ? state.logicalMin : state.physicalMin;
-        const physicalMax = physicalDefault ? state.logicalMax : state.physicalMax;
+        // HID 1.11 section 6.2.2.7: if either physical extent is undefined, or
+        // both are zero, the pair reverts to the logical extents -- a lone
+        // Physical Maximum does not stand on its own.
+        const physicalValid = state.physicalMinDefined && state.physicalMaxDefined &&
+          !(state.physicalMin===0 && state.physicalMaxRaw===0);
+        const logicalMax = state.logicalMin<0
+          ? signExtend(state.logicalMaxRaw,state.logicalMaxSize) : state.logicalMaxRaw;
+        const declaredPhysicalMax = state.physicalMin<0
+          ? signExtend(state.physicalMaxRaw,state.physicalMaxSize) : state.physicalMaxRaw;
+        const physicalMin = physicalValid ? state.physicalMin : state.logicalMin;
+        const physicalMax = physicalValid ? declaredPhysicalMax : logicalMax;
         const fieldRows = expandFields(local, state.reportCount, isArray, itemLines).map(row=>({
             ...row,
             size: state.reportSize,
             logicalMin: state.logicalMin,
-            logicalMax: state.logicalMax,
+            logicalMax,
             physicalMin,
             physicalMax,
             unitLabel: decodeUnit(state.unit, state.unitExponent),
