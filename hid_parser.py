@@ -220,7 +220,12 @@ PALETTE = [
     ("#dcebee", "#4791a3", "#153b43"),  # mouse input - teal
 ]
 
-TOKEN_RE = re.compile(r"0[xX][0-9a-fA-F]+|[A-Za-z_][A-Za-z0-9_]*")
+TOKEN_RE = re.compile(
+    r"0[xX][A-Za-z0-9_]*|[0-9]+[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[A-Za-z_][A-Za-z0-9_]*"
+)
+HEX_BYTE_RE = re.compile(
+    r"0[xX]([0-9a-fA-F]+)(?:[uU](?:ll|LL|[lL])?|(?:ll|LL|[lL])[uU]?)?"
+)
 
 
 # --------------------------------------------------------------------------
@@ -231,18 +236,47 @@ TOKEN_RE = re.compile(r"0[xX][0-9a-fA-F]+|[A-Za-z_][A-Za-z0-9_]*")
 class Token:
     kind: str  # 'num' or 'sym'
     value: object
+    line: int = 0
+
+
+def descriptor_error(message: str, line: int) -> ValueError:
+    return ValueError(f"Line {line}: {message}" if line else message)
 
 
 def tokenize(text: str) -> list:
     tokens = []
-    for line in text.splitlines():
-        code = line.split("//", 1)[0]
+    source_lines = [line.split("//", 1)[0] for line in text.splitlines()]
+    has_initializer = any("{" in line for line in source_lines)
+    brace_depth = 0
+    for ln, source_line in enumerate(source_lines, start=1):
+        if has_initializer:
+            chars = []
+            for char in source_line:
+                if char == "{":
+                    brace_depth += 1
+                elif char == "}":
+                    brace_depth = max(brace_depth - 1, 0)
+                elif brace_depth:
+                    chars.append(char)
+            code = "".join(chars)
+        else:
+            code = source_line
         for m in TOKEN_RE.finditer(code):
             tok = m.group(0)
             if tok[:2] in ("0x", "0X"):
-                tokens.append(Token("num", int(tok, 16)))
+                hex_match = HEX_BYTE_RE.fullmatch(tok)
+                if not hex_match:
+                    raise descriptor_error(f"Malformed hexadecimal byte: {tok}", ln)
+                value = int(hex_match.group(1), 16)
+                if value > 0xFF:
+                    raise descriptor_error(f"Expected a byte, got {tok}", ln)
+                tokens.append(Token("num", value, ln))
+            elif tok[0].isdigit():
+                if not tok.isdigit():
+                    raise descriptor_error(f"Malformed decimal byte: {tok}", ln)
+                raise descriptor_error(f"Decimal byte literals are not supported: {tok}", ln)
             elif re.match(r"^[A-Z][A-Z0-9_]*$", tok):
-                tokens.append(Token("sym", tok))
+                tokens.append(Token("sym", tok, ln))
     return tokens
 
 
@@ -264,6 +298,7 @@ class FieldRow:
     unit_label: Optional[str]
     type_label: str
     usage_id_max: Optional[int] = None
+    usage_text: Optional[str] = None
 
 
 @dataclass
@@ -376,7 +411,86 @@ def type_label(main_name: str, flags: int) -> str:
     return label
 
 
-def expand_fields(usages, usage_min, usage_max, count, current_page, is_array):
+# Local usage state is an ordered list of entries, so that a Main item sees its
+# usages in the order the descriptor declared them -- the order the HID spec
+# assigns them to fields. Each entry is one of:
+#     ("single", (page, uid))
+#     ["range", (page, uid), (page, uid) or None]   # None until Usage Maximum
+def usage_entry_value(raw_value: int, size: int, current_page: Optional[int]):
+    """Resolve a Usage/Usage Minimum/Usage Maximum item to a (page, uid) pair."""
+    if size == 4:  # extended usage: the page is embedded in the high half
+        return ((raw_value >> 16) & 0xFFFF, raw_value & 0xFFFF)
+    return (current_page, raw_value)
+
+
+def start_usage_range(entries: list, value) -> None:
+    entries.append(["range", value, None])
+
+
+def finish_usage_range(entries: list, value) -> None:
+    # A Usage Maximum with no preceding Minimum is malformed. Like a dangling
+    # Minimum (dropped in expand_fields), it's exactly the kind of real-world
+    # anomaly this tool exists to surface, so ignore the stray item rather than
+    # aborting the whole parse.
+    for entry in reversed(entries):
+        if entry[0] == "range" and entry[2] is None:
+            entry[2] = value
+            return
+
+
+def first_usage(entries: list):
+    """The usage a Collection item takes its identity from, or None."""
+    return entries[0][1] if entries else None
+
+
+def entry_page(entry, current_page: Optional[int]) -> Optional[int]:
+    if entry[0] == "single":
+        return entry[1][0]
+    min_page, max_page = entry[1][0], entry[2][0]
+    return min_page if min_page == max_page else current_page
+
+
+def usage_entry_name(entry, current_page: Optional[int]) -> str:
+    page = entry_page(entry, current_page)
+    if entry[0] == "single":
+        return usage_display_name(page, entry[1][1])
+    return usage_range_name(page, entry[1][1], entry[2][1])
+
+
+def usage_entry_text(entry, current_page: Optional[int]) -> str:
+    page = entry_page(entry, current_page)
+    if entry[0] == "single":
+        return f"({page_str(page)}) {usage_str(entry[1][1])}"
+    return f"({page_str(page)}) {usage_str(entry[1][1])}–{usage_str(entry[2][1])}"
+
+
+def expanded_usages(entries: list, count: int, current_page: Optional[int]) -> list:
+    """Flatten the entries into one (page, uid) per report slot, in order."""
+    values = []
+    for entry in entries:
+        if entry[0] == "single":
+            values.append(entry[1])
+        else:
+            page = entry_page(entry, current_page)
+            for uid in range(entry[1][1], entry[2][1] + 1):
+                if len(values) >= count:
+                    break
+                values.append((page, uid))
+        if len(values) >= count:
+            break
+    if not values:
+        return []
+    while len(values) < count:  # last usage repeats for any extra slots
+        values.append(values[-1])
+    return values[:count]
+
+
+def padding_row(count: int) -> dict:
+    return {"usage_page": None, "usage_id": None, "usage_id_max": None,
+            "usage_text": None, "name": "Padding", "count": count}
+
+
+def expand_fields(usage_entries: list, count: int, current_page, is_array: bool) -> list:
     """Split a Main item's REPORT_COUNT slots across the usages declared for it.
 
     Variable items (is_array=False) mirror how these descriptors are conventionally
@@ -385,43 +499,55 @@ def expand_fields(usages, usage_min, usage_max, count, current_page, is_array):
 
     Array items (is_array=True) are semantically different: REPORT_COUNT is the
     number of simultaneous index slots (e.g. up to 6 concurrent keycodes), and
-    each slot can independently hold any value in the declared usage range at
+    each slot can independently hold any value in the declared usage set at
     runtime -- it is one field-group, not one distinct control per slot. Splitting
     those per slot (like a Variable item) would fabricate `count` fake fields out
     of what is really a single ranged array, e.g. truncating a 0x00-0x65 keycode
     array down to just its first few values. So an Array item always collapses to
-    a single row spanning the whole REPORT_COUNT, with its usage range preserved.
+    a single row spanning the whole REPORT_COUNT, listing every declared usage.
+    Only a lone range collapses to usage_id/usage_id_max: a range mixed with
+    discrete usages is not contiguous, and folding it into one min-max span would
+    claim the gaps between them are declared usages when they are not.
 
     A single aggregated "Padding" row is returned when no usage was declared at
     all (pure constant filler), regardless of Array/Variable.
     """
-    usage_list = list(usages)
-    if not usage_list and usage_min is not None and usage_max is not None:
-        if is_array:
-            return [(usage_min, count, usage_max)]
-        min_page, min_uid = usage_min
-        max_page, max_uid = usage_max
-        if min_page == max_page:
-            usage_list = [(min_page, u) for u in range(min_uid, max_uid + 1)]
-        else:
-            usage_list = [(current_page, u) for u in range(min_uid, max_uid + 1)]
-    if not usage_list:
-        return [(None, count, None)]
+    # Drop a Minimum that no Maximum ever closed (e.g. the HID 1.11 spec's own
+    # Appendix D.1 joystick example) instead of aborting the whole parse.
+    entries = [e for e in usage_entries if e[0] == "single" or e[2] is not None]
+
     if is_array:
-        first, last = usage_list[0], usage_list[-1]
-        return [(first, count, last if last != first else None)]
-    if len(usage_list) < count:
-        last = usage_list[-1]
-        usage_list = usage_list + [last] * (count - len(usage_list))
-    elif len(usage_list) > count:
-        usage_list = usage_list[:count]
+        if not entries:
+            return [padding_row(count)]
+        first = entries[0]
+        lone_range = first if len(entries) == 1 and first[0] == "range" else None
+        return [{
+            "usage_page": entry_page(first, current_page),
+            "usage_id": first[1][1],
+            "usage_id_max": lone_range[2][1] if lone_range else None,
+            "usage_text": ", ".join(usage_entry_text(e, current_page) for e in entries),
+            "name": ", ".join(usage_entry_name(e, current_page) for e in entries),
+            "count": count,
+        }]
+
+    values = expanded_usages(entries, count, current_page)
+    if not values:
+        return [padding_row(count)]
     rows = []
     i = 0
-    while i < len(usage_list):
+    while i < len(values):
         j = i
-        while j + 1 < len(usage_list) and usage_list[j + 1] == usage_list[i]:
+        while j + 1 < len(values) and values[j + 1] == values[i]:
             j += 1
-        rows.append((usage_list[i], j - i + 1, None))
+        page, uid = values[i]
+        rows.append({
+            "usage_page": page,
+            "usage_id": uid,
+            "usage_id_max": None,
+            "usage_text": f"({page_str(page)}) {usage_str(uid)}",
+            "name": usage_display_name(page, uid),
+            "count": j - i + 1,
+        })
         i = j + 1
     return rows
 
@@ -441,21 +567,22 @@ def parse_descriptor(text: str) -> ParseResult:
 
     usage_page = None
     logical_min = 0
-    logical_max = 0
+    logical_max_raw = 0
+    logical_max_size = 0
     physical_min = 0
-    physical_max = 0
+    physical_max_raw = 0
+    physical_max_size = 0
     unit_exponent = 0
     unit = 0
     report_size = 0
     report_count = 0
     report_id = None
-    physical_defined = False
+    physical_min_defined = False
+    physical_max_defined = False
     unit_defined = False
 
     global_stack = []
     usages: list = []
-    usage_min = None
-    usage_max = None
     collection_stack: list = []
     root: list = []
     app_name_stack: list = []
@@ -466,10 +593,8 @@ def parse_descriptor(text: str) -> ParseResult:
         return collection_stack[-1].children if collection_stack else root
 
     def reset_local():
-        nonlocal usages, usage_min, usage_max
+        nonlocal usages
         usages = []
-        usage_min = None
-        usage_max = None
 
     i = 0
     n = len(tokens)
@@ -510,13 +635,15 @@ def parse_descriptor(text: str) -> ParseResult:
             elif name == "LogicalMinimum":
                 logical_min = sign_extend(raw_value, size)
             elif name == "LogicalMaximum":
-                logical_max = sign_extend(raw_value, size)
+                logical_max_raw = raw_value
+                logical_max_size = size
             elif name == "PhysicalMinimum":
                 physical_min = sign_extend(raw_value, size)
-                physical_defined = True
+                physical_min_defined = True
             elif name == "PhysicalMaximum":
-                physical_max = sign_extend(raw_value, size)
-                physical_defined = True
+                physical_max_raw = raw_value
+                physical_max_size = size
+                physical_max_defined = True
             elif name == "UnitExponent":
                 v = raw_value & 0xF
                 if v > 7:
@@ -533,52 +660,42 @@ def parse_descriptor(text: str) -> ParseResult:
             elif name == "ReportID":
                 report_id = symbol if symbol is not None else raw_value
             elif name == "Push":
-                global_stack.append((usage_page, logical_min, logical_max, physical_min,
-                                      physical_max, unit_exponent, unit, report_size,
-                                      report_count, report_id, physical_defined,
+                global_stack.append((usage_page, logical_min, logical_max_raw,
+                                      logical_max_size, physical_min,
+                                      physical_max_raw, physical_max_size,
+                                      unit_exponent, unit, report_size,
+                                      report_count, report_id, physical_min_defined,
+                                      physical_max_defined,
                                       unit_defined))
             elif name == "Pop":
                 if global_stack:
-                    (usage_page, logical_min, logical_max, physical_min, physical_max,
-                     unit_exponent, unit, report_size, report_count, report_id,
-                     physical_defined, unit_defined) = global_stack.pop()
+                    (usage_page, logical_min, logical_max_raw, logical_max_size,
+                     physical_min, physical_max_raw, physical_max_size, unit_exponent,
+                     unit, report_size, report_count, report_id,
+                     physical_min_defined, physical_max_defined,
+                     unit_defined) = global_stack.pop()
 
         elif type_code == 2:  # Local
             name = LOCAL_TAGS.get(tag)
             if name == "Usage":
-                if size == 4:
-                    page = (raw_value >> 16) & 0xFFFF
-                    uid = raw_value & 0xFFFF
-                    usages.append((page, uid))
-                else:
-                    usages.append((usage_page, raw_value))
+                usages.append(("single", usage_entry_value(raw_value, size, usage_page)))
             elif name == "UsageMinimum":
-                usage_min = (
-                    ((raw_value >> 16) & 0xFFFF, raw_value & 0xFFFF)
-                    if size == 4 else (usage_page, raw_value)
-                )
+                start_usage_range(usages, usage_entry_value(raw_value, size, usage_page))
             elif name == "UsageMaximum":
-                usage_max = (
-                    ((raw_value >> 16) & 0xFFFF, raw_value & 0xFFFF)
-                    if size == 4 else (usage_page, raw_value)
-                )
+                finish_usage_range(usages, usage_entry_value(raw_value, size, usage_page))
 
         elif type_code == 0:  # Main
             name = MAIN_TAGS.get(tag)
             if name == "Collection":
                 ctype_name = COLLECTION_TYPES.get(raw_value, f"Reserved (0x{raw_value:X})")
-                if usages:
-                    entry_page, entry_uid = usages[0]
-                elif usage_min is not None:
-                    entry_page, entry_uid = usage_min
-                else:
-                    entry_page, entry_uid = None, None
-                node = CollectionNode(ctype=ctype_name, usage_page=entry_page, usage_id=entry_uid)
+                first = first_usage(usages)
+                node_page, node_uid = first if first is not None else (None, None)
+                node = CollectionNode(ctype=ctype_name, usage_page=node_page, usage_id=node_uid)
                 current_parent().append(node)
                 collection_stack.append(node)
                 if ctype_name == "Application":
                     node.is_app = True
-                    app_name_stack.append(collection_usage_name(entry_page, entry_uid))
+                    app_name_stack.append(collection_usage_name(node_page, node_uid))
                 reset_local()
 
             elif name == "EndCollection":
@@ -590,24 +707,37 @@ def parse_descriptor(text: str) -> ParseResult:
             elif name in ("Input", "Output", "Feature"):
                 flags = raw_value
                 is_array = not (flags & 0x02)
-                rows = expand_fields(usages, usage_min, usage_max, report_count, usage_page, is_array)
-                phys_valid = physical_defined
+                rows = expand_fields(usages, report_count, usage_page, is_array)
                 unit_valid = unit_defined
+                logical_max = (
+                    sign_extend(logical_max_raw, logical_max_size)
+                    if logical_min < 0 else logical_max_raw
+                )
+                physical_max = (
+                    sign_extend(physical_max_raw, physical_max_size)
+                    if physical_min < 0 else physical_max_raw
+                )
+                # HID 1.11 section 6.2.2.7: if either physical extent is
+                # undefined, or both are zero, the pair reverts to the logical
+                # extents -- a lone Physical Maximum does not stand on its own.
+                physical_valid = (
+                    physical_min_defined and physical_max_defined
+                    and not (physical_min == 0 and physical_max == 0)
+                )
                 field_rows = []
-                for u, cnt, u_max in rows:
-                    u_page, u_id = u if u is not None else (None, None)
-                    u_max_id = u_max[1] if u_max is not None else None
+                for row in rows:
                     field_rows.append(FieldRow(
-                        name=usage_range_name(u_page, u_id, u_max_id),
-                        usage_page=u_page,
-                        usage_id=u_id,
-                        usage_id_max=u_max_id,
+                        name=row["name"],
+                        usage_page=row["usage_page"],
+                        usage_id=row["usage_id"],
+                        usage_id_max=row["usage_id_max"],
+                        usage_text=row["usage_text"],
                         size=report_size,
-                        count=cnt,
+                        count=row["count"],
                         logical_min=logical_min,
                         logical_max=logical_max,
-                        physical_min=physical_min if phys_valid else None,
-                        physical_max=physical_max if phys_valid else None,
+                        physical_min=physical_min if physical_valid else logical_min,
+                        physical_max=physical_max if physical_valid else logical_max,
                         unit_label=decode_unit(unit, unit_exponent) if unit_valid else None,
                         type_label=type_label(name, flags),
                     ))
@@ -651,14 +781,8 @@ COLUMNS = ["Field", "Usage (Page)", "Size (bits)", "Count", "Logical Min",
 
 
 def row_cells(r: FieldRow):
-    if r.usage_id is None:
-        usage_col = "—"
-    elif r.usage_id_max is not None:
-        usage_col = f"({page_str(r.usage_page)}) {usage_str(r.usage_id)}–{usage_str(r.usage_id_max)}"
-    else:
-        usage_col = f"({page_str(r.usage_page)}) {usage_str(r.usage_id)}"
     return [
-        r.name, usage_col, str(r.size), str(r.count),
+        r.name, fmt_cell(r.usage_text), str(r.size), str(r.count),
         fmt_cell(r.logical_min), fmt_cell(r.logical_max),
         fmt_cell(r.physical_min), fmt_cell(r.physical_max),
         fmt_cell(r.unit_label), r.type_label,
@@ -739,13 +863,7 @@ def render_group_html(g: ReportGroup) -> str:
     rows_html = []
     for r in g.rows:
         is_pad = r.usage_id is None
-        if is_pad:
-            usage_col = "&mdash;"
-        elif r.usage_id_max is not None:
-            usage_col = (f"({html.escape(page_str(r.usage_page))}) "
-                         f"{html.escape(usage_str(r.usage_id))}&ndash;{html.escape(usage_str(r.usage_id_max))}")
-        else:
-            usage_col = f"({html.escape(page_str(r.usage_page))}) {html.escape(usage_str(r.usage_id))}"
+        usage_col = "&mdash;" if r.usage_text is None else html.escape(r.usage_text)
         rows_html.append(
             "<tr>"
             f'<td class="field-name{" pad" if is_pad else ""}">{html.escape(r.name)}</td>'
@@ -853,7 +971,10 @@ def main():
     else:
         text = SAMPLE_DESCRIPTOR
 
-    result = parse_descriptor(text)
+    try:
+        result = parse_descriptor(text)
+    except ValueError as e:
+        sys.exit(f"error: {e}")
 
     if not args.no_text:
         print_text_report(result)
