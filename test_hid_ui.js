@@ -13,7 +13,7 @@ const parserSource = scriptMatch[1].slice(
 const context = {};
 vm.createContext(context);
 vm.runInContext(
-  `${parserSource}\nglobalThis.hidTestApi = { parseDescriptor, SAMPLE };`,
+  `${parserSource}\nglobalThis.hidTestApi = { parseDescriptor, SAMPLE, usageDisplayName };`,
   context,
 );
 
@@ -28,6 +28,20 @@ function expectError(descriptor, pattern) {
 const sample = normalize(context.hidTestApi.parseDescriptor(context.hidTestApi.SAMPLE));
 assert.strictEqual(sample.groups.length, 6);
 assert.strictEqual(sample.groups.reduce((total, group) => total + group.rows.length, 0), 24);
+
+const hapticsNames = new Map([
+  [0x10, 'Waveform List'], [0x11, 'Duration List'], [0x20, 'Auto Trigger'],
+  [0x21, 'Manual Trigger'], [0x22, 'Auto Trigger Associated Control'],
+  [0x23, 'Intensity'], [0x24, 'Repeat Count'], [0x25, 'Retrigger Period'],
+  [0x26, 'Waveform Vendor Page'], [0x27, 'Waveform Vendor ID'],
+  [0x28, 'Waveform Cutoff Time'], [0x1001, 'Waveform None'],
+  [0x1015, 'Waveform Grow'],
+]);
+for (const [usage, name] of hapticsNames) {
+  assert.strictEqual(context.hidTestApi.usageDisplayName(0x0E, usage), name);
+}
+assert.strictEqual(context.hidTestApi.usageDisplayName(0x0A, 3), 'Instance 3');
+assert.strictEqual(context.hidTestApi.usageDisplayName(0x0A, 7), 'Instance 7');
 
 const unsignedMaximum = rows(`
   0x05,0x01, 0x09,0x02, 0xA1,0x01,

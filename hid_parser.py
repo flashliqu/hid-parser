@@ -200,7 +200,26 @@ USAGE_NAMES = {
         0x58: "Button Switch", 0x59: "Pad Type", 0x60: "Latency Mode",
         0xB0: "Button Press Threshold",
     },
-    0x0E: {0x01: "Simple Haptics Controller", 0x23: "Intensity"},
+    0x0E: {
+        0x01: "Simple Haptics Controller",
+        0x10: "Waveform List", 0x11: "Duration List",
+        0x20: "Auto Trigger", 0x21: "Manual Trigger",
+        0x22: "Auto Trigger Associated Control", 0x23: "Intensity",
+        0x24: "Repeat Count", 0x25: "Retrigger Period",
+        0x26: "Waveform Vendor Page", 0x27: "Waveform Vendor ID",
+        0x28: "Waveform Cutoff Time",
+        0x1001: "Waveform None", 0x1002: "Waveform Stop",
+        0x1003: "Waveform Click", 0x1004: "Waveform Buzz Continuous",
+        0x1005: "Waveform Rumble Continuous", 0x1006: "Waveform Press",
+        0x1007: "Waveform Release", 0x1008: "Waveform Hover",
+        0x1009: "Waveform Success", 0x100A: "Waveform Error",
+        0x100B: "Waveform Ink Continuous", 0x100C: "Waveform Pencil Continuous",
+        0x100D: "Waveform Marker Continuous",
+        0x100E: "Waveform Chisel Marker Continuous",
+        0x100F: "Waveform Brush Continuous", 0x1010: "Waveform Eraser Continuous",
+        0x1011: "Waveform Sparkle Continuous", 0x1012: "Waveform Collide",
+        0x1013: "Waveform Align", 0x1014: "Waveform Step", 0x1015: "Waveform Grow",
+    },
     0x20: {0x0494: "Mechanical Force"},
 }
 
@@ -351,6 +370,8 @@ def usage_display_name(page: Optional[int], uid: Optional[int]) -> str:
         return "Padding"
     if page == 0x09:
         return f"Button {uid}"
+    if page == 0x0A and uid > 0:
+        return f"Instance {uid}"
     if page is not None and page >= 0xFF00:
         return PTPHQA_VENDOR_USAGES.get(uid, "Vendor Data")
     return USAGE_NAMES.get(page, {}).get(uid, f"Usage 0x{uid:02X}")

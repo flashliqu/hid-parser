@@ -1,9 +1,32 @@
 import unittest
 
-from hid_parser import parse_descriptor
+from hid_parser import parse_descriptor, usage_display_name
 
 
 class HidParserTests(unittest.TestCase):
+    def test_haptics_and_ordinal_usage_names(self):
+        expected_haptics = {
+            0x10: "Waveform List",
+            0x11: "Duration List",
+            0x20: "Auto Trigger",
+            0x21: "Manual Trigger",
+            0x22: "Auto Trigger Associated Control",
+            0x23: "Intensity",
+            0x24: "Repeat Count",
+            0x25: "Retrigger Period",
+            0x26: "Waveform Vendor Page",
+            0x27: "Waveform Vendor ID",
+            0x28: "Waveform Cutoff Time",
+            0x1001: "Waveform None",
+            0x1015: "Waveform Grow",
+        }
+        for usage, name in expected_haptics.items():
+            with self.subTest(usage=usage):
+                self.assertEqual(usage_display_name(0x0E, usage), name)
+
+        self.assertEqual(usage_display_name(0x0A, 3), "Instance 3")
+        self.assertEqual(usage_display_name(0x0A, 7), "Instance 7")
+
     def test_unsigned_logical_maximum_is_not_sign_extended(self):
         descriptor = """
             0x05, 0x01, 0x75, 0x08, 0x95, 0x01,
