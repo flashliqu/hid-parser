@@ -1,10 +1,11 @@
-name: Deploy hid_ui.html to GitHub Pages
+name: Deploy web tools to GitHub Pages
 
 on:
   push:
     branches: ["main"]
     paths:
       - "hid_ui.html"
+      - "temporal/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 
@@ -31,6 +32,7 @@ jobs:
         run: |
           mkdir -p _site
           cp hid_ui.html _site/index.html
+          cp -r temporal _site/temporal
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

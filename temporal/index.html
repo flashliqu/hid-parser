@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Temporal report comparison</title>
+<style>
+*{box-sizing:border-box}body{font:16px/1.5 system-ui,sans-serif;background:#f4f7fb;color:#182a40;margin:0}main{max-width:1280px;margin:auto;padding:40px 24px}h1{font-size:34px;letter-spacing:-1px;margin:12px 0}p{color:#526479}.eyebrow{color:#2563eb;font-size:13px;font-weight:700;letter-spacing:2px}.inputs{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:28px 0}label{display:block;background:white;border:1px solid #d6e0ec;border-radius:14px;padding:22px;font-weight:650}label small{display:block;font-weight:400;color:#63758a;margin:6px 0 22px}input{display:block;width:100%;font-size:13px}button{background:#245bdf;color:white;border:0;border-radius:8px;padding:12px 20px;font:inherit;cursor:pointer}button:disabled{opacity:.45;cursor:default}#download{background:white;color:#245bdf;border:1px solid #245bdf;margin-left:10px}#status{min-height:28px;margin:18px 0}iframe{width:100%;height:1100px;background:white;border:1px solid #d6e0ec;border-radius:12px}a{color:#245bdf}@media(max-width:760px){.inputs{grid-template-columns:1fr}main{padding:24px 16px}h1{font-size:28px}}
+</style></head><body><main>
+<a href="../">← HID decoder</a><div class="eyebrow" style="margin-top:28px">IFPSIM · REPORT TOOLS</div>
+<h1>Compare spatial &amp; temporal results</h1><p>Select the three folder-accuracy HTML reports to compare classification accuracy, regions, and settle latency.</p>
+<p><strong>Files stay on your computer.</strong> Processing runs in your browser; no reports are uploaded.</p>
+<div class="inputs">
+<label for="original">1. Original spatial + temporal<small>Usually acm_original.html</small><input id="original" type="file" accept=".html,.htm,text/html"></label>
+<label for="old">2. New spatial + old temporal<small>Usually new_spatial_old_temp.html</small><input id="old" type="file" accept=".html,.htm,text/html"></label>
+<label for="new">3. New spatial + new temporal<small>Usually new_spatial_new_temp.html</small><input id="new" type="file" accept=".html,.htm,text/html"></label>
+</div>
+<button id="generate" disabled>Generate comparison</button><button id="download" disabled>Download HTML</button>
+<p id="status" role="status" aria-live="polite">Select one report for each configuration. Reports must cover the same recording files and include settle latency.</p>
+<iframe id="preview" title="Generated accuracy and settle latency comparison" sandbox hidden></iframe>
+</main><script src="converter.js"></script><script src="app.js"></script></body></html>
