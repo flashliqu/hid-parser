@@ -15,3 +15,26 @@ Run converter validation with three local source reports (the reports stay outsi
 ```sh
 node test_temporal.js /path/acm_original.html /path/new_spatial_old_temp.html /path/new_spatial_new_temp.html
 ```
+
+## Run on a local port
+
+Requires Python 3. On Windows, double-click `temporal/start-local.cmd`, then open
+<http://127.0.0.1:8000/>. Keep the launcher window open while using the page.
+
+From a terminal, run from the repository root:
+
+```sh
+python temporal/serve.py
+```
+
+Use `python3` if that is your system's Python 3 command. For a different port:
+
+```sh
+python temporal/serve.py --port 8001
+```
+
+Open the printed URL, select the three reports, generate the comparison, and download
+its HTML. Press Ctrl+C in the terminal to stop the server. The launcher binds only
+to `127.0.0.1` and serves only the converter's HTML and JavaScript assets, regardless
+of the working directory. It does not accept report uploads or serve your reports.
+The HID decoder link returns to this same converter when running locally.
